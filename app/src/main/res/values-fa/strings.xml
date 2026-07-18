@@ -1,0 +1,52 @@
+<resources>
+    <string name="app_name">اوربیت</string>
+    <string name="app_desc">برنامه‌های پرکاربرد خود را با یک ضربه از هر صفحه‌ای مرور و اجرا کنید</string>
+    <string name="customize_theme">شخصی‌سازی رنگ تم نئون</string>
+    <string name="theme_desc">رنگ نئون دلخواه خود را برای حباب شناور و صفحه داشبورد انتخاب کنید</string>
+    <string name="bubble_size_title">شخصی‌سازی اندازه حباب</string>
+    <string name="bubble_size_desc">اندازه حباب شناور را به صورت پویا روی صفحه تغییر دهید (بین ۳۰dp تا ۸۰dp)</string>
+    <string name="settings_permissions">تنظیمات و دسترسی‌های برنامه</string>
+    <string name="display_over_apps">نمایش روی برنامه‌های دیگر</string>
+    <string name="display_over_apps_desc">برای نمایش حباب شناور اقدام سریع روی سایر صفحات فعال، ضروری است.</string>
+    <string name="usage_stats">آمار استفاده از سیستم</string>
+    <string name="usage_stats_desc">برای شناسایی و چیدمان برنامه‌های نصب شده بر اساس میزان استفاده واقعی مورد نیاز است.</string>
+    <string name="foreground_notifications">اعلان‌های پس‌زمینه</string>
+    <string name="foreground_notifications_desc">اجرای روان سرویس حباب شناور را بدون وقفه سیستم در پس‌زمینه حفظ می‌کند.</string>
+    <string name="granted">تأیید شده</string>
+    <string name="enable">فعال‌سازی</string>
+    <string name="activate_permissions_warning">لطفاً برای فعال کردن سرویس شناور پس‌زمینه، تمام دسترسی‌های مورد نیاز بالا را فعال کنید.</string>
+    <string name="stop_service">توقف سرویس شناور</string>
+    <string name="start_service">شروع سرویس شناور</string>
+    
+    <!-- Intro Sequence strings -->
+    <string name="intro_msg_1">این برنامه مخصوص افراد تنبل ساخته شده است</string>
+    <string name="intro_msg_2">همه چیز در اینجا داخل گوشی شما اتفاق می‌افتد</string>
+    <string name="intro_msg_3">لذت ببرید</string>
+    <string name="intro_next">بعدی</string>
+
+    <!-- Onboarding strings -->
+    <string name="onboarding_title">به اوربیت خوش آمدید</string>
+    <string name="onboarding_funny_tagline">این برنامه مخصوص افراد تنبل ساخته شده است!</string>
+    <string name="onboarding_simple_desc">اوربیت به عنوان یک دستیار پرتاب‌کننده برنامه‌ها روی صفحه کار می‌کند تا بتوانید بلافاصله با یک ضربه از هر جایی برنامه‌های دلخواه خود را جستجو و اجرا کنید.</string>
+    <string name="onboarding_privacy_note">برنامه Orbit کاملاً آفلاین کار میکند و دادههای شخصی شما هرگز از گوشی خارج نمیشود.</string>
+    <string name="onboarding_get_started">شروع به کار</string>
+    <string name="onboarding_skip_permissions">رد کردن دسترسی‌ها</string>
+    
+    <!-- Language Switcher -->
+    <string name="select_language">انتخاب زبان / Select Language</string>
+
+    <!-- Overlay strings -->
+    <string name="overlay_launchpad">منوی اجرای اوربیت</string>
+    <string name="overlay_no_usage_permission">دسترسی به آمار استفاده فعال نیست؛ برنامه‌ها بر اساس الفبا مرتب شده‌اند.</string>
+    <string name="overlay_no_usage_stats">هیچ آمار استفاده‌ای در ۷ روز گذشته یافت نشد؛ برنامه‌ها بر اساس الفبا مرتب شده‌اند.</string>
+    <string name="overlay_most_used">بیشترین استفاده (۷ روز گذشته)</string>
+    <string name="overlay_search_placeholder">جستجوی برنامه‌ها...</string>
+    <string name="overlay_no_matching">برنامه‌ای پیدا نشد</string>
+    <string name="overlay_favorites">برگزیده‌ها ⭐</string>
+    <string name="overlay_cannot_open">امکان باز کردن این برنامه وجود ندارد</string>
+    <string name="overlay_search_results">نتایج جستجو</string>
+    <string name="overlay_all_apps">همه برنامه‌ها</string>
+    <string name="overlay_close">بستن</string>
+    <string name="permission_skip">رد کردن</string>
+    <string name="permission_skipped">رد شده</string>
+</resources>

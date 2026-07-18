@@ -1,0 +1,52 @@
+<resources>
+    <string name="app_name">أوربت</string>
+    <string name="app_desc">تصفّح وشغّل تطبيقاتك الأكثر استخداماً بنقرة واحدة ومن أي شاشة</string>
+    <string name="customize_theme">تخصيص لون مظهر النيون</string>
+    <string name="theme_desc">اختر لون النيون المفضل لديك للأيقونة العائمة واللوحة الرئيسية</string>
+    <string name="bubble_size_title">تخصيص حجم الأيقونة</string>
+    <string name="bubble_size_desc">اضبط حجم الأيقونة العائمة ديناميكياً على الشاشة (من 30dp إلى 80dp)</string>
+    <string name="settings_permissions">الإعدادات وصلاحيات التطبيق</string>
+    <string name="display_over_apps">الظهور فوق التطبيقات الأخرى</string>
+    <string name="display_over_apps_desc">مطلوب لعرض الأيقونة العائمة فوق الشاشات النشطة.</string>
+    <string name="usage_stats">إحصاءات استخدام النظام</string>
+    <string name="usage_stats_desc">مطلوب للتعرف على التطبيقات المثبتة وترتيبها حسب معدل الاستخدام الفعلي.</string>
+    <string name="foreground_notifications">الإشعارات الدائمة</string>
+    <string name="foreground_notifications_desc">يُبقي خدمة الأيقونة العائمة تعمل بسلاسة في الخلفية دون مقاطعة من النظام.</string>
+    <string name="granted">ممنوحة</string>
+    <string name="enable">تفعيل</string>
+    <string name="activate_permissions_warning">يرجى تفعيل كافة الصلاحيات المطلوبة أعلاه لتمكين خدمة الأيقونة العائمة في الخلفية.</string>
+    <string name="stop_service">إيقاف الخدمة العائمة</string>
+    <string name="start_service">تشغيل الخدمة العائمة</string>
+    
+    <!-- Intro Sequence strings -->
+    <string name="intro_msg_1">تم صنع هذا التطبيق للكسالى</string>
+    <string name="intro_msg_2">كل شيء هنا يحدث داخل هاتفك</string>
+    <string name="intro_msg_3">استمتع</string>
+    <string name="intro_next">التالي</string>
+
+    <!-- Onboarding strings -->
+    <string name="onboarding_title">مرحباً بك في أوربت</string>
+    <string name="onboarding_funny_tagline">هذا التطبيق صُنع خصيصاً للكسالى!</string>
+    <string name="onboarding_simple_desc">أوربت يعمل كمساعد عائم لفتح التطبيقات على شاشتك، مما يتيح لك البحث عن تطبيقاتك المفضلة وتشغيلها على الفور بنقرة واحدة من أي مكان.</string>
+    <string name="onboarding_privacy_note">تطبيق Orbit يعمل بدون إنترنت تماماً على جهازك، وبياناتك الشخصية لا تغادر هاتفك أبداً.</string>
+    <string name="onboarding_get_started">ابدأ الآن</string>
+    <string name="onboarding_skip_permissions">تخطي الصلاحيات</string>
+    
+    <!-- Language Switcher -->
+    <string name="select_language">اختر اللغة / Select Language</string>
+
+    <!-- Overlay strings -->
+    <string name="overlay_launchpad">منصة إطلاق أوربت</string>
+    <string name="overlay_no_usage_permission">صلاحية الوصول للاستخدام غير مفعّلة؛ تم ترتيب التطبيقات أبجدياً.</string>
+    <string name="overlay_no_usage_stats">لم يتم العثور على إحصاءات استخدام لآخر 7 أيام؛ تم ترتيب التطبيقات أبجدياً.</string>
+    <string name="overlay_most_used">الأكثر استخداماً (آخر 7 أيام)</string>
+    <string name="overlay_search_placeholder">البحث عن تطبيقات...</string>
+    <string name="overlay_no_matching">لم يتم العثور على تطبيقات مطابقة</string>
+    <string name="overlay_favorites">المفضلة ⭐</string>
+    <string name="overlay_cannot_open">لا يمكن فتح هذا التطبيق</string>
+    <string name="overlay_search_results">نتائج البحث</string>
+    <string name="overlay_all_apps">جميع التطبيقات</string>
+    <string name="overlay_close">إغلاق</string>
+    <string name="permission_skip">تخطي</string>
+    <string name="permission_skipped">تم التخطي</string>
+</resources>

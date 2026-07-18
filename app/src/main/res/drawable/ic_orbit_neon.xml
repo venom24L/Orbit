@@ -1,0 +1,33 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="56dp"
+    android:height="56dp"
+    android:viewportWidth="100"
+    android:viewportHeight="100">
+
+    <!-- Outer Circular Background with Deep Dark Space Theme -->
+    <path
+        android:pathData="M 50,50 m -45,0 a 45,45 0 1,1 90,0 a 45,45 0 1,1 -90,0"
+        android:fillColor="#FF0A0F1D"/>
+
+    <!-- Subtle outer glow ring -->
+    <path
+        android:pathData="M 50,50 m -43,0 a 43,43 0 1,1 86,0 a 43,43 0 1,1 -86,0"
+        android:strokeColor="#1F00E5FF"
+        android:strokeWidth="1.5"/>
+
+    <!-- Full glowing cyan sphere (the "moon") -->
+    <path
+        android:pathData="M 50,50 m -30,0 a 30,30 0 1,1 60,0 a 30,30 0 1,1 -60,0"
+        android:fillColor="#FF00C8E0"/>
+
+    <!-- Radial highlight to give the sphere depth (soft light source upper-left) -->
+    <path
+        android:pathData="M 44,42 m -12,0 a 12,12 0 1,1 24,0 a 12,12 0 1,1 -24,0"
+        android:fillColor="#3300F0FF"/>
+
+    <!-- Dark "shadow" circle offset to the right, carving the sphere into a crescent -->
+    <path
+        android:pathData="M 63,44 m -30,0 a 30,30 0 1,1 60,0 a 30,30 0 1,1 -60,0"
+        android:fillColor="#FF0A0F1D"/>
+
+</vector>

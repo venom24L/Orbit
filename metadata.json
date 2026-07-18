@@ -1,0 +1,6 @@
+{
+  "name": "Orbit",
+  "description": "Orbit is an ultra-fast, elegant floating launcher bubble that lets you access and launch your favorite and most-used applications instantly from any screen.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

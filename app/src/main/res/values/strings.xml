@@ -1,0 +1,52 @@
+<resources>
+    <string name="app_name">Orbit</string>
+    <string name="app_desc">Browse and launch your most used apps with a single tap from any screen</string>
+    <string name="customize_theme">Customize Neon Theme Color</string>
+    <string name="theme_desc">Select your preferred neon accent color for the floating bubble and dashboard overlay</string>
+    <string name="bubble_size_title">Bubble Size Customization</string>
+    <string name="bubble_size_desc">Adjust the floating bubble size dynamically on the screen (30dp to 80dp)</string>
+    <string name="settings_permissions">Settings &amp; App Permissions</string>
+    <string name="display_over_apps">Display Over Other Apps</string>
+    <string name="display_over_apps_desc">Required to render the quick action floating bubble on top of active screens.</string>
+    <string name="usage_stats">System Usage Statistics</string>
+    <string name="usage_stats_desc">Required to identify and arrange your installed apps by frequency of actual usage.</string>
+    <string name="foreground_notifications">Foreground Notifications</string>
+    <string name="foreground_notifications_desc">Keeps the background overlay service running smoothly without system interruption.</string>
+    <string name="granted">Granted</string>
+    <string name="enable">Enable</string>
+    <string name="activate_permissions_warning">Please activate all the required permissions above to enable the background floating service.</string>
+    <string name="stop_service">Stop Floating Service</string>
+    <string name="start_service">Start Floating Service</string>
+    
+    <!-- Intro Sequence strings -->
+    <string name="intro_msg_1">This app was made for lazy people</string>
+    <string name="intro_msg_2">Everything here happens inside your phone</string>
+    <string name="intro_msg_3">Enjoy</string>
+    <string name="intro_next">Next</string>
+
+    <!-- Onboarding strings -->
+    <string name="onboarding_title">Welcome to Orbit</string>
+    <string name="onboarding_funny_tagline">This app is made for lazy people!</string>
+    <string name="onboarding_simple_desc">Orbit acts as a floating app launcher helper on your screen, letting you search and launch your favorite apps instantly with a single tap from anywhere.</string>
+    <string name="onboarding_privacy_note">Orbit runs 100% offline on your device, and your personal data never leaves your phone.</string>
+    <string name="onboarding_get_started">Get Started</string>
+    <string name="onboarding_skip_permissions">Skip Permissions</string>
+    
+    <!-- Language Switcher -->
+    <string name="select_language">Select Language / لغة / زبان</string>
+
+    <!-- Overlay strings -->
+    <string name="overlay_launchpad">Orbit Launchpad</string>
+    <string name="overlay_no_usage_permission">Usage Access permission is not enabled; apps sorted alphabetically.</string>
+    <string name="overlay_no_usage_stats">No usage statistics found for the last 7 days; apps sorted alphabetically.</string>
+    <string name="overlay_most_used">Most Used Apps (Last 7 Days)</string>
+    <string name="overlay_search_placeholder">Search apps...</string>
+    <string name="overlay_no_matching">No matching apps found</string>
+    <string name="overlay_favorites">Favorites ⭐</string>
+    <string name="overlay_cannot_open">Cannot open this application</string>
+    <string name="overlay_search_results">Search Results</string>
+    <string name="overlay_all_apps">All Applications</string>
+    <string name="overlay_close">Close</string>
+    <string name="permission_skip">Skip</string>
+    <string name="permission_skipped">Skipped</string>
+</resources>
