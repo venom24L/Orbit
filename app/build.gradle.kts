@@ -188,11 +188,11 @@ tasks.register("downloadAndVerifyTessdata") {
             if (needsDownload) {
                 logger.lifecycle("Downloading $fileName from tessdata_fast...")
                 val url = java.net.URI("$tessdataBaseUrl/$fileName").toURL()
-url.openStream().use { input: java.io.InputStream ->
-    targetFile.outputStream().use { output: java.io.FileOutputStream ->
-        input.copyTo(output)
-    }
-}
+                url.openStream().use { input: java.io.InputStream ->
+                 targetFile.outputStream().use { output: java.io.FileOutputStream ->
+                   input.copyTo(output)
+                  }
+               }
             }
 
             val actualBytes = targetFile.length()
