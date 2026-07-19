@@ -143,7 +143,7 @@ fun ScreenCaptureOverlay(
                 drawRect(
                     color = Color(0xFF00E5FF),
                     topLeft = Offset(sel.left, sel.top),
-                    size = Size(sel.width(), sel.height()),
+                    size = Size(sel.width, sel.height),
                     style = Stroke(width = 3f)
                 )
             }
