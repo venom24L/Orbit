@@ -27,22 +27,39 @@ object TessDataManager {
 
         for (lang in languages) {
             val destFile = File(tessDir, "$lang.traineddata")
-            // Check if file exists and has size > 0 to ensure it wasn't a partial write
-            if (!destFile.exists() || destFile.length() == 0L) {
-                Log.d(TAG, "Copying $lang.traineddata from assets...")
+            
+            // Get expected size directly from the asset file stream
+            val expectedSize = try {
+                context.assets.open("tessdata/$lang.traineddata").use { input ->
+                    input.available().toLong()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to get asset size for $lang.traineddata", e)
+                0L
+            }
+
+            Log.d(TAG, "Verifying $lang.traineddata. Expected size: $expectedSize, Current local size: ${if (destFile.exists()) destFile.length() else -1L}")
+
+            // If file does not exist or has incorrect size, re-copy it
+            if (!destFile.exists() || destFile.length() != expectedSize || expectedSize == 0L) {
+                Log.d(TAG, "Copying or replacing $lang.traineddata from assets...")
+                if (destFile.exists()) {
+                    val deleted = destFile.delete()
+                    Log.d(TAG, "Deleted old/mismatched file: $deleted")
+                }
                 try {
                     context.assets.open("tessdata/$lang.traineddata").use { input ->
                         FileOutputStream(destFile).use { output ->
                             input.copyTo(output)
                         }
                     }
-                    Log.d(TAG, "Successfully copied $lang.traineddata")
+                    Log.d(TAG, "Successfully copied $lang.traineddata. New size: ${destFile.length()}")
                 } catch (e: Exception) {
                     Log.e(TAG, "Error copying $lang.traineddata from assets", e)
                     success = false
                 }
             } else {
-                Log.d(TAG, "$lang.traineddata already exists on internal storage")
+                Log.d(TAG, "$lang.traineddata is valid and already exists on internal storage")
             }
         }
         success
@@ -52,8 +69,10 @@ object TessDataManager {
      * Returns the path to the directory containing the 'tessdata' folder.
      * Tesseract expects the parent path (i.e., context.filesDir.absolutePath),
      * and it will automatically look for files under <path>/tessdata/.
+     * We append a trailing slash (File.separator) to ensure absolute safety.
      */
     fun getTessDataPath(context: Context): String {
-        return context.filesDir.absolutePath
+        val path = context.filesDir.absolutePath
+        return if (path.endsWith(File.separator)) path else path + File.separator
     }
 }
