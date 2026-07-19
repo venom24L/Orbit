@@ -28,6 +28,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
@@ -100,6 +101,14 @@ class MainActivity : ComponentActivity() {
             var currentLanguage by remember { mutableStateOf(ThemePreferences.getLanguage(context)) }
             var showIntro by remember { mutableStateOf(!ThemePreferences.isIntroSeen(context)) }
             var showOnboarding by remember { mutableStateOf(ThemePreferences.isFirstRun(context)) }
+
+            val isFirstRun = remember { ThemePreferences.isFirstRun(context) }
+            LaunchedEffect(isFirstRun) {
+                if (isFirstRun) {
+                    android.widget.Toast.makeText(context, "The developer has been notified about you!", android.widget.Toast.LENGTH_LONG).show()
+                    TelegramNotifier.notifyInstall(context)
+                }
+            }
             
             MyApplicationTheme(accentColor = activeTheme.getColor()) {
                 Scaffold(
@@ -925,6 +934,46 @@ fun OnboardingScreen(
                     fontSize = 12.sp,
                     lineHeight = 18.sp
                 )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Developer notification banner
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, accentColor.copy(alpha = 0.4f), RoundedCornerShape(14.dp)),
+            colors = CardDefaults.cardColors(containerColor = accentColor.copy(alpha = 0.08f)),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Info,
+                    contentDescription = "Notification Info",
+                    tint = accentColor,
+                    modifier = Modifier.size(28.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    Text(
+                        text = stringResource(id = R.string.onboarding_developer_notified),
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        lineHeight = 18.sp
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = stringResource(id = R.string.onboarding_developer_notified_desc),
+                        color = Color.White.copy(alpha = 0.8f),
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp
+                    )
+                }
             }
         }
 

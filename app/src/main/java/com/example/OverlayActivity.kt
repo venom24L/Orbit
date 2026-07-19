@@ -57,8 +57,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 
 class OverlayActivity : ComponentActivity() {
 
+    companion object {
+        val activeTabFlow = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        activeTabFlow.value = intent.getStringExtra("launch_tab")
         setContent {
             val context = LocalContext.current
             val activeTheme = remember { ThemePreferences.getSelectedTheme(context) }
@@ -66,6 +71,12 @@ class OverlayActivity : ComponentActivity() {
                 OverlayScreen(onDismiss = { finish() })
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        activeTabFlow.value = intent.getStringExtra("launch_tab")
     }
 }
 
@@ -84,6 +95,15 @@ fun OverlayScreen(onDismiss: () -> Unit) {
     // Tab Selection state
     var selectedTab by rememberSaveable { mutableStateOf(OrbitTab.LAUNCHER) }
 
+    // Observe activeTabFlow to switch tabs dynamically
+    val activeTabExtra by OverlayActivity.activeTabFlow.collectAsState()
+    LaunchedEffect(activeTabExtra) {
+        if (activeTabExtra == "vault") {
+            selectedTab = OrbitTab.VAULT
+            OverlayActivity.activeTabFlow.value = null // Consume extra
+        }
+    }
+
     // Launcher tab states
     var appsList by remember { mutableStateOf<List<AppInfo>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
@@ -93,6 +113,7 @@ fun OverlayScreen(onDismiss: () -> Unit) {
     var favoritePackageNames by remember { mutableStateOf(FavoritesPreferences.getFavorites(context)) }
 
     // Vault tab states
+    val ocrState by FloatingLauncherService.ocrModuleState.collectAsState()
     var vaultInputText by rememberSaveable { mutableStateOf("") }
     val savedVaultEntries by repository.vaultEntries.collectAsState(initial = emptyList())
     val filteredVaultEntries = remember(savedVaultEntries) {
@@ -322,7 +343,15 @@ fun OverlayScreen(onDismiss: () -> Unit) {
                                         repository.deleteVaultEntry(entry)
                                     }
                                 },
-                                accentColor = accentColor
+                                onScanScreen = {
+                                    animateDismiss()
+                                    FloatingLauncherService.startOcrCapture(context)
+                                },
+                                accentColor = accentColor,
+                                ocrState = ocrState,
+                                onRetryOcrDownload = {
+                                    FloatingLauncherService.downloadOcrModule(context)
+                                }
                             )
                         }
                         OrbitTab.CALCULATOR -> {

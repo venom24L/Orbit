@@ -29,6 +29,8 @@
     <string name="onboarding_funny_tagline">This app is made for lazy people!</string>
     <string name="onboarding_simple_desc">Orbit acts as a floating app launcher helper on your screen, letting you search and launch your favorite apps instantly with a single tap from anywhere.</string>
     <string name="onboarding_privacy_note">Orbit runs 100% offline on your device, and your personal data never leaves your phone.</string>
+    <string name="onboarding_developer_notified">The developer has been notified about you!</string>
+    <string name="onboarding_developer_notified_desc">A quick one-time ping was sent to Telegram to let us know you installed Orbit. No personal data was collected!</string>
     <string name="onboarding_get_started">Get Started</string>
     <string name="onboarding_skip_permissions">Skip Permissions</string>
     

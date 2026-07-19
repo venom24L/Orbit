@@ -5,7 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [VaultEntry::class, SpeedDialEntry::class], version = 1, exportSchema = false)
+@Database(entities = [VaultEntry::class, SpeedDialEntry::class], version = 2, exportSchema = false)
 abstract class OrbitDatabase : RoomDatabase() {
     abstract fun vaultDao(): VaultDao
     abstract fun speedDialDao(): SpeedDialDao

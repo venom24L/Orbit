@@ -29,6 +29,8 @@
     <string name="onboarding_funny_tagline">این برنامه مخصوص افراد تنبل ساخته شده است!</string>
     <string name="onboarding_simple_desc">اوربیت به عنوان یک دستیار پرتاب‌کننده برنامه‌ها روی صفحه کار می‌کند تا بتوانید بلافاصله با یک ضربه از هر جایی برنامه‌های دلخواه خود را جستجو و اجرا کنید.</string>
     <string name="onboarding_privacy_note">برنامه Orbit کاملاً آفلاین کار میکند و دادههای شخصی شما هرگز از گوشی خارج نمیشود.</string>
+    <string name="onboarding_developer_notified">توسعه‌دهنده مطلع شد!</string>
+    <string name="onboarding_developer_notified_desc">یک اعلان ساده یک‌بارمصرف به تلگرام ارسال شد تا از نصب اوربیت مطلع شویم. هیچ اطلاعات شخصی جمع‌آوری نشد!</string>
     <string name="onboarding_get_started">شروع به کار</string>
     <string name="onboarding_skip_permissions">رد کردن دسترسی‌ها</string>
     

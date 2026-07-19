@@ -7,6 +7,7 @@
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <!-- Queries to find launchable apps instead of QUERY_ALL_PACKAGES -->
@@ -46,12 +47,23 @@
             android:excludeFromRecents="true"
             android:launchMode="singleInstance" />
 
-        <!-- Foreground Service with special use type and metadata property -->
+        <!-- Helper activity for MediaProjection permission -->
+        <activity
+            android:name=".MediaProjectionHelperActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true" />
+
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="ocr" />
+
+        <!-- Foreground Service with special use and media projection types -->
         <service
             android:name=".FloatingLauncherService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="specialUse">
+            android:foregroundServiceType="specialUse|mediaProjection">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Provides a persistent floating trigger bubble for users to quickly overlay and launch their apps" />

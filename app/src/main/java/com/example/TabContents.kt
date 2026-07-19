@@ -306,8 +306,12 @@ fun VaultTabContent(
     savedEntries: List<VaultEntry>,
     onSaveEntry: () -> Unit,
     onDeleteEntry: (VaultEntry) -> Unit,
-    accentColor: Color
+    onScanScreen: () -> Unit,
+    accentColor: Color,
+    ocrState: OcrModuleState,
+    onRetryOcrDownload: () -> Unit
 ) {
+    val context = LocalContext.current
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -357,6 +361,142 @@ fun VaultTabContent(
             }
         }
 
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Large modern button for Scan Screen (OCR)
+        val isOcrReady = ocrState is OcrModuleState.Available || ocrState is OcrModuleState.Undefined
+
+        if (ocrState !is OcrModuleState.Available && ocrState !is OcrModuleState.Undefined) {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0x0AFFFFFF)
+                ),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    when (ocrState) {
+                        is OcrModuleState.Pending -> {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                CircularProgressIndicator(
+                                    color = accentColor,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    text = "Preparing text recognition...",
+                                    color = Color.White,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                        is OcrModuleState.Downloading -> {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = "Preparing text recognition... ${ocrState.progress}%",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                LinearProgressIndicator(
+                                    progress = { ocrState.progress / 100f },
+                                    color = accentColor,
+                                    trackColor = Color.White.copy(alpha = 0.1f),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(6.dp)
+                                        .clip(RoundedCornerShape(3.dp))
+                                )
+                            }
+                        }
+                        is OcrModuleState.Installing -> {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                CircularProgressIndicator(
+                                    color = accentColor,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    text = "Installing text recognition module...",
+                                    color = Color.White,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                        is OcrModuleState.Failed -> {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = ocrState.error,
+                                    color = Color(0xFFFF5252),
+                                    fontSize = 12.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Button(
+                                    onClick = onRetryOcrDownload,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = accentColor,
+                                        contentColor = Color.Black
+                                    ),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.height(32.dp),
+                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp)
+                                ) {
+                                    Text("Retry Download", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+        }
+
+        Button(
+            onClick = onScanScreen,
+            enabled = isOcrReady,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (isOcrReady) accentColor else Color.White.copy(alpha = 0.1f),
+                contentColor = if (isOcrReady) Color.Black else TextSecondary,
+                disabledContainerColor = Color.White.copy(alpha = 0.1f),
+                disabledContentColor = TextSecondary
+            ),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(44.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.CameraAlt,
+                contentDescription = "OCR Scan Icon",
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Scan Screen (OCR)", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
+
         Spacer(modifier = Modifier.height(12.dp))
 
         Text(
@@ -396,16 +536,83 @@ fun VaultTabContent(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
+                            // High-fidelity Source badge
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(bottom = 6.dp)
+                            ) {
+                                if (entry.source == "OCR") {
+                                    Box(
+                                        modifier = Modifier
+                                            .background(accentColor.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                                            .border(0.5.dp, accentColor, RoundedCornerShape(4.dp))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.CameraAlt,
+                                                contentDescription = "OCR badge icon",
+                                                tint = accentColor,
+                                                modifier = Modifier.size(10.dp)
+                                            )
+                                            Text(
+                                                text = "SCREEN OCR",
+                                                color = accentColor,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    Box(
+                                        modifier = Modifier
+                                            .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(4.dp))
+                                            .border(0.5.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = "MANUAL",
+                                            color = Color.White.copy(alpha = 0.6f),
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+
                             Text(
                                 text = entry.content,
                                 color = Color.White,
                                 fontSize = 13.sp,
-                                maxLines = 3,
+                                maxLines = 4,
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
                         
                         Spacer(modifier = Modifier.width(8.dp))
+
+                        // Custom Copy to Clipboard Button
+                        IconButton(
+                            onClick = {
+                                val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                val clipData = android.content.ClipData.newPlainText("Vault Note", entry.content)
+                                clipboardManager.setPrimaryClip(clipData)
+                                Toast.makeText(context, "Copied to clipboard!", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = "Copy entry",
+                                tint = accentColor,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(4.dp))
                         
                         IconButton(
                             onClick = { onDeleteEntry(entry) },

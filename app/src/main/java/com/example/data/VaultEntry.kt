@@ -7,5 +7,6 @@ import androidx.room.PrimaryKey
 data class VaultEntry(
     @PrimaryKey(autoGenerate = true) val id: Long = 0L,
     val content: String,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val source: String = "MANUAL"
 )

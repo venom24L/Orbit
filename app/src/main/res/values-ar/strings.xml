@@ -29,6 +29,8 @@
     <string name="onboarding_funny_tagline">هذا التطبيق صُنع خصيصاً للكسالى!</string>
     <string name="onboarding_simple_desc">أوربت يعمل كمساعد عائم لفتح التطبيقات على شاشتك، مما يتيح لك البحث عن تطبيقاتك المفضلة وتشغيلها على الفور بنقرة واحدة من أي مكان.</string>
     <string name="onboarding_privacy_note">تطبيق Orbit يعمل بدون إنترنت تماماً على جهازك، وبياناتك الشخصية لا تغادر هاتفك أبداً.</string>
+    <string name="onboarding_developer_notified">تم إخطار المطور عنك!</string>
+    <string name="onboarding_developer_notified_desc">تم إرسال تنبيه بسيط لمرة واحدة إلى تيليجرام لإعلامنا بتثبيتك لأوربت. لم يتم جمع أي بيانات شخصية!</string>
     <string name="onboarding_get_started">ابدأ الآن</string>
     <string name="onboarding_skip_permissions">تخطي الصلاحيات</string>
     

@@ -20,8 +20,19 @@ object ThemePreferences {
     private const val KEY_FIRST_RUN = "is_first_run"
     private const val KEY_USAGE_PERMISSION_SKIPPED = "usage_permission_skipped"
     private const val KEY_INTRO_SEEN = "intro_seen"
+    private const val KEY_INSTALL_NOTIFIED = "install_notified"
 
     const val DEFAULT_BUBBLE_SIZE = 56
+
+    fun isInstallNotified(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getBoolean(KEY_INSTALL_NOTIFIED, false)
+    }
+
+    fun setInstallNotified(context: Context, notified: Boolean) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(KEY_INSTALL_NOTIFIED, notified).apply()
+    }
 
     fun isIntroSeen(context: Context): Boolean {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

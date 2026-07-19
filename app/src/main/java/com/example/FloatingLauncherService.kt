@@ -32,6 +32,35 @@ import androidx.dynamicanimation.animation.DynamicAnimation
 import androidx.dynamicanimation.animation.SpringAnimation
 import androidx.dynamicanimation.animation.SpringForce
 import androidx.dynamicanimation.animation.FloatValueHolder
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
+import androidx.savedstate.SavedStateRegistry
+import androidx.savedstate.SavedStateRegistryController
+import androidx.savedstate.SavedStateRegistryOwner
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.lifecycle.setViewTreeViewModelStoreOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.example.ui.theme.MyApplicationTheme
+import com.example.data.OrbitDatabase
+import com.example.data.VaultEntry
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import android.media.ImageReader
+import android.hardware.display.VirtualDisplay
+import android.hardware.display.DisplayManager
+import android.graphics.Bitmap
+import android.util.DisplayMetrics
+import android.os.Handler
+import android.os.Looper
+import android.widget.Toast
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -39,6 +68,16 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlin.math.hypot
+
+sealed class OcrModuleState {
+    object Undefined : OcrModuleState()
+    object Available : OcrModuleState()
+    object Pending : OcrModuleState()
+    data class Downloading(val progress: Int) : OcrModuleState()
+    object Installing : OcrModuleState()
+    object Completed : OcrModuleState()
+    data class Failed(val error: String) : OcrModuleState()
+}
 
 class FloatingLauncherService : Service() {
 
@@ -56,6 +95,10 @@ class FloatingLauncherService : Service() {
     
     private var springX: SpringAnimation? = null
 
+    // Tracking screen region selection overlay
+    private var selectionOverlayView: View? = null
+    private var selectionOverlayLifecycleOwner: ServiceLifecycleOwner? = null
+
     // Background scope to preload the cache without blocking the main UI thread
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -71,12 +114,156 @@ class FloatingLauncherService : Service() {
 
         // Accessible from MainActivity to observe service lifecycle state in real-time
         val isServiceRunning = MutableStateFlow(false)
+
+        val ocrModuleState = MutableStateFlow<OcrModuleState>(OcrModuleState.Undefined)
+
+        fun downloadOcrModule(context: Context) {
+            try {
+                com.google.mlkit.common.sdkinternal.MlKitContext.initializeIfNeeded(context.applicationContext)
+                val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+                val moduleInstallClient = com.google.android.gms.common.moduleinstall.ModuleInstall.getClient(context.applicationContext)
+                
+                moduleInstallClient.areModulesAvailable(recognizer)
+                    .addOnSuccessListener { response ->
+                        if (response.areModulesAvailable()) {
+                            ocrModuleState.value = OcrModuleState.Available
+                        } else {
+                            ocrModuleState.value = OcrModuleState.Pending
+                            
+                            val listener = com.google.android.gms.common.moduleinstall.InstallStatusListener { event ->
+                                val progressInfo = event.progressInfo
+                                val progress = if (progressInfo != null && progressInfo.totalBytesToDownload > 0) {
+                                    (progressInfo.bytesDownloaded * 100 / progressInfo.totalBytesToDownload).toInt()
+                                } else {
+                                    0
+                                }
+                                
+                                when (event.installState) {
+                                    com.google.android.gms.common.moduleinstall.ModuleInstallStatusUpdate.InstallState.STATE_PENDING -> {
+                                        ocrModuleState.value = OcrModuleState.Pending
+                                    }
+                                    com.google.android.gms.common.moduleinstall.ModuleInstallStatusUpdate.InstallState.STATE_DOWNLOADING -> {
+                                        ocrModuleState.value = OcrModuleState.Downloading(progress)
+                                    }
+                                    com.google.android.gms.common.moduleinstall.ModuleInstallStatusUpdate.InstallState.STATE_INSTALLING -> {
+                                        ocrModuleState.value = OcrModuleState.Installing
+                                    }
+                                    com.google.android.gms.common.moduleinstall.ModuleInstallStatusUpdate.InstallState.STATE_COMPLETED -> {
+                                        ocrModuleState.value = OcrModuleState.Available
+                                    }
+                                    com.google.android.gms.common.moduleinstall.ModuleInstallStatusUpdate.InstallState.STATE_FAILED,
+                                    com.google.android.gms.common.moduleinstall.ModuleInstallStatusUpdate.InstallState.STATE_CANCELED -> {
+                                        ocrModuleState.value = OcrModuleState.Failed("Download failed. Please check internet connection.")
+                                    }
+                                }
+                            }
+                            
+                            val request = com.google.android.gms.common.moduleinstall.ModuleInstallRequest.newBuilder()
+                                .addApi(recognizer)
+                                .setListener(listener)
+                                .build()
+                                
+                            moduleInstallClient.installModules(request)
+                                .addOnSuccessListener {
+                                    android.util.Log.d("OrbitOCR", "OCR module download initiated successfully.")
+                                }
+                                .addOnFailureListener { e ->
+                                    android.util.Log.e("OrbitOCR", "Failed to initiate OCR module installation", e)
+                                    ocrModuleState.value = OcrModuleState.Failed(e.message ?: "Failed to start download")
+                                }
+                        }
+                    }
+                    .addOnFailureListener { e ->
+                        android.util.Log.e("OrbitOCR", "Failed checking OCR module availability", e)
+                        ocrModuleState.value = OcrModuleState.Failed(e.message ?: "Failed checking availability")
+                    }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                ocrModuleState.value = OcrModuleState.Failed(e.message ?: "Unknown error")
+            }
+        }
+
+        @Volatile
+        var instance: FloatingLauncherService? = null
+
+        // MediaProjection session
+        var mediaProjection: android.media.projection.MediaProjection? = null
+
+        fun promoteToMediaProjection() {
+            instance?.promoteToMediaProjectionInstance()
+        }
+
+        fun demoteFromMediaProjection() {
+            instance?.demoteFromMediaProjectionInstance()
+        }
+
+        // Named transition delay constant for real-device reliability
+        const val POST_DISMISSAL_DELAY_MS = 150L
+
+        private var onPermissionGrantedCallback: (() -> Unit)? = null
+        private var onPermissionDeniedCallback: (() -> Unit)? = null
+
+        fun onProjectionPermissionGranted() {
+            onPermissionGrantedCallback?.invoke()
+            onPermissionGrantedCallback = null
+            onPermissionDeniedCallback = null
+        }
+
+        fun onProjectionPermissionDenied() {
+            onPermissionDeniedCallback?.invoke()
+            onPermissionGrantedCallback = null
+            onPermissionDeniedCallback = null
+        }
+
+        fun startOcrCapture(context: Context) {
+            val service = instance
+            if (service == null) {
+                Toast.makeText(context, "Orbit Service is not running", Toast.LENGTH_SHORT).show()
+                return
+            }
+
+            if (mediaProjection != null) {
+                // Already have permission! Show selection overlay directly after post-dismissal delay
+                service.serviceScope.launch(Dispatchers.Main) {
+                    delay(POST_DISMISSAL_DELAY_MS)
+                    service.showSelectionOverlay()
+                }
+            } else {
+                // Request MediaProjection permission first
+                onPermissionGrantedCallback = {
+                    service.serviceScope.launch(Dispatchers.Main) {
+                        delay(POST_DISMISSAL_DELAY_MS)
+                        service.showSelectionOverlay()
+                    }
+                }
+                onPermissionDeniedCallback = {
+                    // Reopen OverlayActivity so user isn't stuck
+                    val reopenIntent = Intent(context, OverlayActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        putExtra("launch_tab", "vault")
+                    }
+                    context.startActivity(reopenIntent)
+                }
+
+                val intent = Intent(context, MediaProjectionHelperActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+            }
+        }
     }
 
     override fun onCreate() {
         super.onCreate()
+        try {
+            com.google.mlkit.common.sdkinternal.MlKitContext.initializeIfNeeded(applicationContext)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         isServiceRunning.value = true
+        instance = this
 
         registerScreenReceiver()
         registerPackageReceiver()
@@ -85,6 +272,8 @@ class FloatingLauncherService : Service() {
         serviceScope.launch {
             AppCache.getApps(this@FloatingLauncherService)
         }
+
+        downloadOcrModule(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -93,7 +282,15 @@ class FloatingLauncherService : Service() {
             return START_NOT_STICKY
         }
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification(isBubbleHidden))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID, 
+                buildNotification(isBubbleHidden), 
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification(isBubbleHidden))
+        }
 
         when (intent?.action) {
             ACTION_UPDATE_THEME -> {
@@ -547,6 +744,319 @@ class FloatingLauncherService : Service() {
         manager.notify(NOTIFICATION_ID, buildNotification(isBackgroundMode))
     }
 
+    fun promoteToMediaProjectionInstance() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification(isBubbleHidden),
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            )
+        }
+    }
+
+    fun demoteFromMediaProjectionInstance() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification(isBubbleHidden),
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
+        }
+    }
+
+    private fun showSelectionOverlay() {
+        val context = this
+        val lifecycleOwner = ServiceLifecycleOwner()
+        selectionOverlayLifecycleOwner = lifecycleOwner
+
+        var composeView: ComposeView? = null
+        composeView = ComposeView(context).apply {
+            setViewTreeLifecycleOwner(lifecycleOwner)
+            setViewTreeSavedStateRegistryOwner(lifecycleOwner)
+            setViewTreeViewModelStoreOwner(lifecycleOwner)
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent {
+                val currentTheme = ThemePreferences.getSelectedTheme(context)
+                MyApplicationTheme(accentColor = currentTheme.getColor()) {
+                    SelectionOverlayUI(
+                        accentColor = currentTheme.getColor(),
+                        onCancel = {
+                            removeSelectionOverlay()
+                        },
+                        onCapture = { left, top, right, bottom ->
+                            // Temporarily hide the overlay view to get a clean screenshot of the background app
+                            composeView?.visibility = View.GONE
+                            
+                            // Allow UI thread a frame to fully hide the overlay
+                            Handler(Looper.getMainLooper()).postDelayed({
+                                performScreenCapture(
+                                    left = left,
+                                    top = top,
+                                    right = right,
+                                    bottom = bottom,
+                                    onSuccess = { croppedBitmap ->
+                                        // Bring back or remove the overlay
+                                        removeSelectionOverlay()
+                                        processOcrAndSave(croppedBitmap)
+                                    },
+                                    onError = { error ->
+                                        composeView?.visibility = View.VISIBLE
+                                        Toast.makeText(context, "Capture failed: ${error.message}", Toast.LENGTH_SHORT).show()
+                                    }
+                                )
+                            }, 50)
+                        }
+                    )
+                }
+            }
+        }
+        selectionOverlayView = composeView
+
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            } else {
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_PHONE
+            },
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        )
+
+        try {
+            windowManager?.addView(composeView, params)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Failed to display selection overlay", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun removeSelectionOverlay() {
+        selectionOverlayView?.let { view ->
+            try {
+                windowManager?.removeViewImmediate(view)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        selectionOverlayView = null
+        selectionOverlayLifecycleOwner?.onDestroy()
+        selectionOverlayLifecycleOwner = null
+    }
+
+    private fun performScreenCapture(
+        left: Float,
+        top: Float,
+        right: Float,
+        bottom: Float,
+        onSuccess: (Bitmap) -> Unit,
+        onError: (Throwable) -> Unit
+    ) {
+        val projection = mediaProjection
+        if (projection == null) {
+            onError(IllegalStateException("MediaProjection is not initialized or expired"))
+            return
+        }
+
+        val displayMetrics = resources.displayMetrics
+        val screenWidth = displayMetrics.widthPixels
+        val screenHeight = displayMetrics.heightPixels
+        val densityDpi = displayMetrics.densityDpi
+
+        val imageReader = ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
+        var virtualDisplay: android.hardware.display.VirtualDisplay? = null
+        
+        val projectionCallback = object : android.media.projection.MediaProjection.Callback() {
+            override fun onStop() {
+                super.onStop()
+                try {
+                    virtualDisplay?.release()
+                    virtualDisplay = null
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                try {
+                    imageReader.close()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+
+        try {
+            // Register callback BEFORE starting capture (Required on Android 14+ / API 34+)
+            projection.registerCallback(projectionCallback, Handler(Looper.getMainLooper()))
+
+            var captureDone = false
+            imageReader.setOnImageAvailableListener({ reader ->
+                if (captureDone) return@setOnImageAvailableListener
+                captureDone = true
+                
+                try {
+                    val image = reader.acquireLatestImage()
+                    if (image != null) {
+                        val planes = image.planes
+                        val buffer = planes[0].buffer
+                        val pixelStride = planes[0].pixelStride
+                        val rowStride = planes[0].rowStride
+                        val rowPadding = rowStride - pixelStride * screenWidth
+                        
+                        val fullBitmap = Bitmap.createBitmap(
+                            screenWidth + rowPadding / pixelStride,
+                            screenHeight,
+                            Bitmap.Config.ARGB_8888
+                        )
+                        fullBitmap.copyPixelsFromBuffer(buffer)
+                        image.close()
+
+                        // Crop to screenWidth and screenHeight first to discard trailing padding
+                        val cleanFullBitmap = Bitmap.createBitmap(fullBitmap, 0, 0, screenWidth, screenHeight)
+                        if (cleanFullBitmap != fullBitmap) {
+                            fullBitmap.recycle()
+                        }
+
+                        // Coerce bounds to screen size
+                        val cropLeft = left.coerceIn(0f, screenWidth.toFloat()).toInt()
+                        val cropTop = top.coerceIn(0f, screenHeight.toFloat()).toInt()
+                        val cropWidth = (right - left).coerceIn(10f, (screenWidth - cropLeft).toFloat()).toInt()
+                        val cropHeight = (bottom - top).coerceIn(10f, (screenHeight - cropTop).toFloat()).toInt()
+
+                        val croppedBitmap = Bitmap.createBitmap(cleanFullBitmap, cropLeft, cropTop, cropWidth, cropHeight)
+                        cleanFullBitmap.recycle()
+
+                        onSuccess(croppedBitmap)
+                    } else {
+                        onError(Exception("Failed to acquire latest image frame"))
+                    }
+                } catch (e: Exception) {
+                    onError(e)
+                } finally {
+                    try {
+                        projection.unregisterCallback(projectionCallback)
+                    } catch (ex: Exception) {
+                        ex.printStackTrace()
+                    }
+                    virtualDisplay?.release()
+                    imageReader.close()
+
+                    // On Android 14+ (API >= 34), a MediaProjection is single-use and consumed.
+                    // Stop it now so the callback nullifies FloatingLauncherService.mediaProjection,
+                    // allowing the next scan to acquire a fresh valid session.
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        try {
+                            projection.stop()
+                        } catch (ex: Exception) {
+                            ex.printStackTrace()
+                        }
+                    }
+                }
+            }, Handler(Looper.getMainLooper()))
+
+            virtualDisplay = projection.createVirtualDisplay(
+                "OrbitCapture",
+                screenWidth,
+                screenHeight,
+                densityDpi,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                imageReader.surface,
+                null,
+                null
+            )
+        } catch (e: Exception) {
+            try {
+                projection.unregisterCallback(projectionCallback)
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+            virtualDisplay?.release()
+            imageReader.close()
+
+            // On Android 14+ (API >= 34), stop the projection on immediate error too
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                try {
+                    projection.stop()
+                } catch (ex: Exception) {
+                    ex.printStackTrace()
+                }
+            }
+            onError(e)
+        }
+    }
+
+    private fun processOcrAndSave(bitmap: Bitmap, retryCount: Int = 0) {
+        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        val image = InputImage.fromBitmap(bitmap, 0)
+
+        recognizer.process(image)
+            .addOnSuccessListener { visionText ->
+                val text = visionText.text
+                bitmap.recycle() // Clean up bitmap memory immediately
+                
+                if (text.isNotBlank()) {
+                    serviceScope.launch(Dispatchers.IO) {
+                        val db = OrbitDatabase.getDatabase(this@FloatingLauncherService)
+                        // Add new OCR sourced item to Room database
+                        db.vaultDao().insert(VaultEntry(content = text, source = "OCR"))
+                        
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(this@FloatingLauncherService, "Text extracted & saved to Vault!", Toast.LENGTH_SHORT).show()
+                            
+                            // Smoothly bring back OverlayActivity to the Vault tab!
+                            val reopenIntent = Intent(this@FloatingLauncherService, OverlayActivity::class.java).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                putExtra("launch_tab", "vault")
+                            }
+                            startActivity(reopenIntent)
+                        }
+                    }
+                } else {
+                    Toast.makeText(this@FloatingLauncherService, "No text detected in selection region.", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .addOnFailureListener { exception ->
+                val isModuleDownloading = if (exception is com.google.mlkit.common.MlKitException) {
+                    exception.errorCode == 14 || // MlKitException.UNAVAILABLE
+                    exception.errorCode == com.google.mlkit.common.MlKitException.UNAVAILABLE ||
+                    exception.message?.contains("download", ignoreCase = true) == true ||
+                    exception.message?.contains("waiting", ignoreCase = true) == true ||
+                    exception.message?.contains("optional module", ignoreCase = true) == true
+                } else {
+                    exception.message?.contains("optional module", ignoreCase = true) == true
+                }
+
+                if (isModuleDownloading && retryCount < 3) {
+                    // Trigger download programmatically just to be certain
+                    try {
+                        val moduleInstallClient = com.google.android.gms.common.moduleinstall.ModuleInstall.getClient(applicationContext)
+                        val request = com.google.android.gms.common.moduleinstall.ModuleInstallRequest.newBuilder()
+                            .addApi(recognizer)
+                            .build()
+                        moduleInstallClient.installModules(request)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+
+                    Toast.makeText(
+                        this@FloatingLauncherService,
+                        "Preparing text recognition (one-time setup)... Retrying in 3 seconds.",
+                        Toast.LENGTH_LONG
+                    ).show()
+
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        processOcrAndSave(bitmap, retryCount + 1)
+                    }, 3000)
+                } else {
+                    bitmap.recycle() // Clean up bitmap memory immediately on failure too
+                    Toast.makeText(this@FloatingLauncherService, "OCR Failed: ${exception.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+    }
+
     private fun dpToPx(dp: Float, context: Context): Int {
         return (dp * context.resources.displayMetrics.density).toInt()
     }
@@ -554,6 +1064,18 @@ class FloatingLauncherService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         isServiceRunning.value = false
+        instance = null
+
+        // Stop any running MediaProjection session and release references
+        try {
+            mediaProjection?.stop()
+            mediaProjection = null
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // Clean up screen selection overlay
+        removeSelectionOverlay()
 
         // Unregister screen state listener dynamically to prevent memory leaks and battery drainage
         screenReceiver?.let {
@@ -604,5 +1126,30 @@ class FloatingLauncherService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? {
         return null
+    }
+}
+
+class ServiceLifecycleOwner : LifecycleOwner, SavedStateRegistryOwner, ViewModelStoreOwner {
+    private val lifecycleRegistry = LifecycleRegistry(this)
+    private val savedStateRegistryController = SavedStateRegistryController.create(this)
+    private val store = ViewModelStore()
+
+    init {
+        savedStateRegistryController.performRestore(null)
+        lifecycleRegistry.currentState = Lifecycle.State.RESUMED
+    }
+
+    override val lifecycle: Lifecycle
+        get() = lifecycleRegistry
+
+    override val savedStateRegistry: SavedStateRegistry
+        get() = savedStateRegistryController.savedStateRegistry
+
+    override val viewModelStore: ViewModelStore
+        get() = store
+
+    fun onDestroy() {
+        lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
+        store.clear()
     }
 }
