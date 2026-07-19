@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.VaultEntry
 import com.example.data.SpeedDialEntry
+import com.example.data.VaultFolder
 import com.example.ui.theme.TextSecondary
 
 @Composable
@@ -304,19 +305,60 @@ fun VaultTabContent(
     vaultText: String,
     onVaultTextChange: (String) -> Unit,
     savedEntries: List<VaultEntry>,
+    folders: List<VaultFolder>,
+    currentFolderId: Long?,
+    currentFolderName: String,
+    onCurrentFolderIdChange: (Long?) -> Unit,
+    onCreateFolder: (String) -> Unit,
+    onDeleteFolder: (VaultFolder) -> Unit,
     onSaveEntry: () -> Unit,
     onDeleteEntry: (VaultEntry) -> Unit,
+    editingEntry: com.example.data.VaultEntry?,
+    onStartEditing: (com.example.data.VaultEntry?) -> Unit,
     onScanScreen: () -> Unit,
     accentColor: Color,
     ocrState: OcrModuleState,
     onRetryOcrDownload: () -> Unit
 ) {
     val context = LocalContext.current
+    var isCreatingFolder by remember { mutableStateOf(false) }
+    var newFolderName by remember { mutableStateOf("") }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(vertical = 4.dp)
     ) {
+        // Edit Mode Header Info
+        if (editingEntry != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(accentColor.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Editing Saved Note...",
+                    color = accentColor,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Cancel Edit",
+                    color = Color(0xFFFF5252),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable { onStartEditing(null) }
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+        }
+
         // Compose section
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -354,8 +396,8 @@ fun VaultTabContent(
                     )
             ) {
                 Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = "Save Note",
+                    imageVector = if (editingEntry != null) Icons.Default.Check else Icons.Default.Add,
+                    contentDescription = if (editingEntry != null) "Update Note" else "Save Note",
                     tint = if (vaultText.isNotBlank()) Color.Black else TextSecondary
                 )
             }
@@ -420,7 +462,7 @@ fun VaultTabContent(
                                         .fillMaxWidth()
                                         .height(6.dp)
                                         .clip(RoundedCornerShape(3.dp))
-                                )
+                                  )
                             }
                         }
                         is OcrModuleState.Installing -> {
@@ -499,15 +541,118 @@ fun VaultTabContent(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        Text(
-            text = "Saved Scratchpad Vault",
-            color = accentColor,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(bottom = 6.dp)
-        )
+        // Folders Section Header and Controls
+        if (currentFolderId == null) {
+            // Root View Folder Section
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Vault Folders",
+                    color = accentColor,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                
+                IconButton(
+                    onClick = { isCreatingFolder = !isCreatingFolder },
+                    modifier = Modifier.size(24.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isCreatingFolder) Icons.Default.Close else Icons.Default.CreateNewFolder,
+                        contentDescription = "New Folder",
+                        tint = accentColor,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
 
-        if (savedEntries.isEmpty()) {
+            if (isCreatingFolder) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    TextField(
+                        value = newFolderName,
+                        onValueChange = { newFolderName = it },
+                        placeholder = { Text("Folder name (e.g. Work, Personal)", color = TextSecondary, fontSize = 14.sp) },
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color(0x1400E5FF),
+                            unfocusedContainerColor = Color(0x0AFFFFFF),
+                            focusedIndicatorColor = accentColor,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White
+                        ),
+                        textStyle = LocalTextStyle.current.copy(fontSize = 14.sp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(52.dp)
+                            .clip(RoundedCornerShape(12.dp)),
+                        singleLine = true
+                    )
+                    IconButton(
+                        onClick = {
+                            if (newFolderName.isNotBlank()) {
+                                onCreateFolder(newFolderName)
+                                newFolderName = ""
+                                isCreatingFolder = false
+                            }
+                        },
+                        enabled = newFolderName.isNotBlank(),
+                        modifier = Modifier
+                            .size(52.dp)
+                            .background(
+                                if (newFolderName.isNotBlank()) accentColor else Color.White.copy(alpha = 0.05f),
+                                RoundedCornerShape(12.dp)
+                            )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = "Create Folder",
+                            tint = if (newFolderName.isNotBlank()) Color.Black else TextSecondary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(14.dp))
+            }
+        } else {
+            // Folder Breadcrumbs Back Navigation Bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onCurrentFolderIdChange(null) }
+                    .background(Color(0x1A00E5FF), RoundedCornerShape(8.dp))
+                    .border(0.5.dp, accentColor.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ArrowBack,
+                    contentDescription = "Back",
+                    tint = accentColor,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Root / $currentFolderName",
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Main List Content (Folders & Notes)
+        if (currentFolderId == null && folders.isEmpty() && savedEntries.isEmpty()) {
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -515,7 +660,21 @@ fun VaultTabContent(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "Vault is empty. Save text clips above!",
+                    text = "Vault is empty. Create a folder or save notes above!",
+                    color = TextSecondary,
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
+        } else if (currentFolderId != null && savedEntries.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "This folder is empty. Save notes inside this folder above!",
                     color = TextSecondary,
                     fontSize = 13.sp,
                     textAlign = TextAlign.Center
@@ -526,6 +685,62 @@ fun VaultTabContent(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                // 1. Folders List (only shown in Root view)
+                if (currentFolderId == null && folders.isNotEmpty()) {
+                    items(folders) { folder ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { onCurrentFolderIdChange(folder.id) }
+                                .background(Color(0x0AFFFFFF), RoundedCornerShape(10.dp))
+                                .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(10.dp))
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Folder,
+                                contentDescription = "Folder",
+                                tint = accentColor,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = folder.name,
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f)
+                            )
+                            IconButton(
+                                onClick = { onDeleteFolder(folder) },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Delete Folder",
+                                    tint = Color(0xFFFF4D4D).copy(alpha = 0.8f),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Header for Notes when both exist in Root view
+                if (currentFolderId == null && folders.isNotEmpty() && savedEntries.isNotEmpty()) {
+                    item {
+                        Text(
+                            text = "Root Notes",
+                            color = accentColor,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
+                        )
+                    }
+                }
+
+                // 2. Notes / Entries List
                 items(savedEntries) { entry ->
                     Row(
                         modifier = Modifier
@@ -536,7 +751,7 @@ fun VaultTabContent(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            // High-fidelity Source badge
+                            // Source badges
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.padding(bottom = 6.dp)
@@ -594,7 +809,20 @@ fun VaultTabContent(
                         
                         Spacer(modifier = Modifier.width(8.dp))
 
-                        // Custom Copy to Clipboard Button
+                        // Edit note row button
+                        IconButton(
+                            onClick = { onStartEditing(entry) },
+                            modifier = Modifier.size(30.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Edit Note",
+                                tint = accentColor.copy(alpha = 0.85f),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+
+                        // Copy to Clipboard Button
                         IconButton(
                             onClick = {
                                 val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
@@ -602,27 +830,25 @@ fun VaultTabContent(
                                 clipboardManager.setPrimaryClip(clipData)
                                 Toast.makeText(context, "Copied to clipboard!", Toast.LENGTH_SHORT).show()
                             },
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.size(30.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.ContentCopy,
                                 contentDescription = "Copy entry",
                                 tint = accentColor,
-                                modifier = Modifier.size(18.dp)
+                                modifier = Modifier.size(16.dp)
                             )
                         }
-
-                        Spacer(modifier = Modifier.width(4.dp))
                         
                         IconButton(
                             onClick = { onDeleteEntry(entry) },
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.size(30.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Delete,
                                 contentDescription = "Delete entry",
                                 tint = Color(0xFFFF4D4D),
-                                modifier = Modifier.size(18.dp)
+                                modifier = Modifier.size(16.dp)
                             )
                         }
                     }

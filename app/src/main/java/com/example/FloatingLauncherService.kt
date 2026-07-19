@@ -48,9 +48,11 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.example.ui.theme.MyApplicationTheme
 import com.example.data.OrbitDatabase
 import com.example.data.VaultEntry
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import com.googlecode.tesseract.android.TessBaseAPI
+import android.graphics.Canvas
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
+import android.graphics.Paint
 import android.media.ImageReader
 import android.hardware.display.VirtualDisplay
 import android.hardware.display.DisplayManager
@@ -116,70 +118,22 @@ class FloatingLauncherService : Service() {
         val isServiceRunning = MutableStateFlow(false)
 
         val ocrModuleState = MutableStateFlow<OcrModuleState>(OcrModuleState.Undefined)
+        var activeOcrFolderId: Long? = null
 
         fun downloadOcrModule(context: Context) {
-            try {
-                com.google.mlkit.common.sdkinternal.MlKitContext.initializeIfNeeded(context.applicationContext)
-                val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-                val moduleInstallClient = com.google.android.gms.common.moduleinstall.ModuleInstall.getClient(context.applicationContext)
-                
-                moduleInstallClient.areModulesAvailable(recognizer)
-                    .addOnSuccessListener { response ->
-                        if (response.areModulesAvailable()) {
-                            ocrModuleState.value = OcrModuleState.Available
-                        } else {
-                            ocrModuleState.value = OcrModuleState.Pending
-                            
-                            val listener = com.google.android.gms.common.moduleinstall.InstallStatusListener { event ->
-                                val progressInfo = event.progressInfo
-                                val progress = if (progressInfo != null && progressInfo.totalBytesToDownload > 0) {
-                                    (progressInfo.bytesDownloaded * 100 / progressInfo.totalBytesToDownload).toInt()
-                                } else {
-                                    0
-                                }
-                                
-                                when (event.installState) {
-                                    com.google.android.gms.common.moduleinstall.ModuleInstallStatusUpdate.InstallState.STATE_PENDING -> {
-                                        ocrModuleState.value = OcrModuleState.Pending
-                                    }
-                                    com.google.android.gms.common.moduleinstall.ModuleInstallStatusUpdate.InstallState.STATE_DOWNLOADING -> {
-                                        ocrModuleState.value = OcrModuleState.Downloading(progress)
-                                    }
-                                    com.google.android.gms.common.moduleinstall.ModuleInstallStatusUpdate.InstallState.STATE_INSTALLING -> {
-                                        ocrModuleState.value = OcrModuleState.Installing
-                                    }
-                                    com.google.android.gms.common.moduleinstall.ModuleInstallStatusUpdate.InstallState.STATE_COMPLETED -> {
-                                        ocrModuleState.value = OcrModuleState.Available
-                                    }
-                                    com.google.android.gms.common.moduleinstall.ModuleInstallStatusUpdate.InstallState.STATE_FAILED,
-                                    com.google.android.gms.common.moduleinstall.ModuleInstallStatusUpdate.InstallState.STATE_CANCELED -> {
-                                        ocrModuleState.value = OcrModuleState.Failed("Download failed. Please check internet connection.")
-                                    }
-                                }
-                            }
-                            
-                            val request = com.google.android.gms.common.moduleinstall.ModuleInstallRequest.newBuilder()
-                                .addApi(recognizer)
-                                .setListener(listener)
-                                .build()
-                                
-                            moduleInstallClient.installModules(request)
-                                .addOnSuccessListener {
-                                    android.util.Log.d("OrbitOCR", "OCR module download initiated successfully.")
-                                }
-                                .addOnFailureListener { e ->
-                                    android.util.Log.e("OrbitOCR", "Failed to initiate OCR module installation", e)
-                                    ocrModuleState.value = OcrModuleState.Failed(e.message ?: "Failed to start download")
-                                }
-                        }
+            ocrModuleState.value = OcrModuleState.Installing
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+            scope.launch {
+                try {
+                    val success = TessDataManager.ensureTessDataReady(context.applicationContext)
+                    if (success) {
+                        ocrModuleState.value = OcrModuleState.Available
+                    } else {
+                        ocrModuleState.value = OcrModuleState.Failed("Failed to initialize offline OCR language data.")
                     }
-                    .addOnFailureListener { e ->
-                        android.util.Log.e("OrbitOCR", "Failed checking OCR module availability", e)
-                        ocrModuleState.value = OcrModuleState.Failed(e.message ?: "Failed checking availability")
-                    }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                ocrModuleState.value = OcrModuleState.Failed(e.message ?: "Unknown error")
+                } catch (e: Exception) {
+                    ocrModuleState.value = OcrModuleState.Failed(e.message ?: "Unknown error")
+                }
             }
         }
 
@@ -215,7 +169,8 @@ class FloatingLauncherService : Service() {
             onPermissionDeniedCallback = null
         }
 
-        fun startOcrCapture(context: Context) {
+        fun startOcrCapture(context: Context, folderId: Long? = null) {
+            activeOcrFolderId = folderId
             val service = instance
             if (service == null) {
                 Toast.makeText(context, "Orbit Service is not running", Toast.LENGTH_SHORT).show()
@@ -256,11 +211,6 @@ class FloatingLauncherService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        try {
-            com.google.mlkit.common.sdkinternal.MlKitContext.initializeIfNeeded(applicationContext)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         isServiceRunning.value = true
         instance = this
@@ -987,74 +937,109 @@ class FloatingLauncherService : Service() {
         }
     }
 
+    private fun preprocessBitmap(src: Bitmap): Bitmap {
+        val width = src.width
+        val height = src.height
+        val dest = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(dest)
+        val paint = Paint()
+
+        // 1. Convert to Grayscale
+        val grayscaleMatrix = ColorMatrix().apply {
+            setSaturation(0f)
+        }
+
+        // 2. Boost Contrast to make text extremely sharp and clear
+        val contrast = 1.8f
+        val translate = -128f * contrast + 128f
+        val contrastMatrix = ColorMatrix(floatArrayOf(
+            contrast, 0f, 0f, 0f, translate,
+            0f, contrast, 0f, 0f, translate,
+            0f, 0f, contrast, 0f, translate,
+            0f, 0f, 0f, 1f, 0f
+        ))
+
+        grayscaleMatrix.postConcat(contrastMatrix)
+        paint.colorFilter = ColorMatrixColorFilter(grayscaleMatrix)
+
+        canvas.drawBitmap(src, 0f, 0f, paint)
+        return dest
+    }
+
     private fun processOcrAndSave(bitmap: Bitmap, retryCount: Int = 0) {
-        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-        val image = InputImage.fromBitmap(bitmap, 0)
+        // Run Tesseract processing on a background default thread
+        serviceScope.launch(Dispatchers.Default) {
+            var tessBaseAPI: TessBaseAPI? = null
+            var preprocessedBitmap: Bitmap? = null
+            try {
+                // Ensure training data files are fully copied from assets
+                val dataReady = TessDataManager.ensureTessDataReady(this@FloatingLauncherService)
+                if (!dataReady) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@FloatingLauncherService, "OCR language data could not be initialized.", Toast.LENGTH_SHORT).show()
+                    }
+                    bitmap.recycle()
+                    return@launch
+                }
 
-        recognizer.process(image)
-            .addOnSuccessListener { visionText ->
-                val text = visionText.text
-                bitmap.recycle() // Clean up bitmap memory immediately
-                
-                if (text.isNotBlank()) {
-                    serviceScope.launch(Dispatchers.IO) {
-                        val db = OrbitDatabase.getDatabase(this@FloatingLauncherService)
-                        // Add new OCR sourced item to Room database
-                        db.vaultDao().insert(VaultEntry(content = text, source = "OCR"))
-                        
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(this@FloatingLauncherService, "Text extracted & saved to Vault!", Toast.LENGTH_SHORT).show()
+                // 1. Preprocess Bitmap (grayscale + contrast correction)
+                preprocessedBitmap = preprocessBitmap(bitmap)
+                bitmap.recycle() // Recycle original immediately
+
+                // 2. Initialize Tesseract
+                tessBaseAPI = TessBaseAPI()
+                val path = TessDataManager.getTessDataPath(this@FloatingLauncherService)
+                // Initialize with both English and Arabic support (eng+ara)
+                val initSuccess = tessBaseAPI.init(path, "eng+ara")
+                if (!initSuccess) {
+                    throw Exception("Failed to initialize Tesseract API with languages eng+ara.")
+                }
+
+                // 3. Perform OCR
+                tessBaseAPI.setImage(preprocessedBitmap)
+                val text = tessBaseAPI.getUTF8Text()
+
+                // Clean up preprocessed bitmap
+                preprocessedBitmap.recycle()
+                preprocessedBitmap = null
+
+                withContext(Dispatchers.Main) {
+                    if (!text.isNullOrBlank()) {
+                        serviceScope.launch(Dispatchers.IO) {
+                            val db = OrbitDatabase.getDatabase(this@FloatingLauncherService)
+                            // Add new Tesseract OCR-sourced item to the Room database
+                            db.vaultDao().insert(VaultEntry(content = text, source = "OCR", folderId = activeOcrFolderId))
                             
-                            // Smoothly bring back OverlayActivity to the Vault tab!
-                            val reopenIntent = Intent(this@FloatingLauncherService, OverlayActivity::class.java).apply {
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                                putExtra("launch_tab", "vault")
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(this@FloatingLauncherService, "Text extracted & saved to Vault!", Toast.LENGTH_SHORT).show()
+                                
+                                // Smoothly bring back OverlayActivity to the Vault tab
+                                val reopenIntent = Intent(this@FloatingLauncherService, OverlayActivity::class.java).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                    putExtra("launch_tab", "vault")
+                                }
+                                startActivity(reopenIntent)
                             }
-                            startActivity(reopenIntent)
                         }
+                    } else {
+                        Toast.makeText(this@FloatingLauncherService, "No text detected in selection region.", Toast.LENGTH_SHORT).show()
                     }
-                } else {
-                    Toast.makeText(this@FloatingLauncherService, "No text detected in selection region.", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("OrbitOCR", "OCR processing failed", e)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@FloatingLauncherService, "OCR Failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            } finally {
+                preprocessedBitmap?.recycle()
+                try {
+                    tessBaseAPI?.recycle()
+                } catch (ex: Exception) {
+                    ex.printStackTrace()
                 }
             }
-            .addOnFailureListener { exception ->
-                val isModuleDownloading = if (exception is com.google.mlkit.common.MlKitException) {
-                    exception.errorCode == 14 || // MlKitException.UNAVAILABLE
-                    exception.errorCode == com.google.mlkit.common.MlKitException.UNAVAILABLE ||
-                    exception.message?.contains("download", ignoreCase = true) == true ||
-                    exception.message?.contains("waiting", ignoreCase = true) == true ||
-                    exception.message?.contains("optional module", ignoreCase = true) == true
-                } else {
-                    exception.message?.contains("optional module", ignoreCase = true) == true
-                }
-
-                if (isModuleDownloading && retryCount < 3) {
-                    // Trigger download programmatically just to be certain
-                    try {
-                        val moduleInstallClient = com.google.android.gms.common.moduleinstall.ModuleInstall.getClient(applicationContext)
-                        val request = com.google.android.gms.common.moduleinstall.ModuleInstallRequest.newBuilder()
-                            .addApi(recognizer)
-                            .build()
-                        moduleInstallClient.installModules(request)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-
-                    Toast.makeText(
-                        this@FloatingLauncherService,
-                        "Preparing text recognition (one-time setup)... Retrying in 3 seconds.",
-                        Toast.LENGTH_LONG
-                    ).show()
-
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        processOcrAndSave(bitmap, retryCount + 1)
-                    }, 3000)
-                } else {
-                    bitmap.recycle() // Clean up bitmap memory immediately on failure too
-                    Toast.makeText(this@FloatingLauncherService, "OCR Failed: ${exception.message}", Toast.LENGTH_SHORT).show()
-                }
-            }
+        }
     }
 
     private fun dpToPx(dp: Float, context: Context): Int {

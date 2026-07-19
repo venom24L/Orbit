@@ -127,7 +127,7 @@ dependencies {
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
-  implementation(libs.play.services.mlkit.text.recognition)
+  implementation("com.github.adaptech-cz.Tesseract4Android:tesseract4android:4.7.0")
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

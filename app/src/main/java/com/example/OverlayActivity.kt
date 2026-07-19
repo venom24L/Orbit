@@ -119,6 +119,9 @@ fun OverlayScreen(onDismiss: () -> Unit) {
     val filteredVaultEntries = remember(savedVaultEntries) {
         savedVaultEntries.filter { it.id != -1L }
     }
+    var currentFolderId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var editingEntry by remember { mutableStateOf<VaultEntry?>(null) }
+    val savedVaultFolders by repository.vaultFolders.collectAsState(initial = emptyList())
 
     // Calculator tab states
     var calculatorInputText by rememberSaveable { mutableStateOf("") }
@@ -326,26 +329,80 @@ fun OverlayScreen(onDismiss: () -> Unit) {
                             )
                         }
                         OrbitTab.VAULT -> {
+                            val displayEntries = remember(filteredVaultEntries, currentFolderId) {
+                                filteredVaultEntries.filter { it.folderId == currentFolderId }
+                            }
+                            val currentFolderName = remember(savedVaultFolders, currentFolderId) {
+                                savedVaultFolders.find { it.id == currentFolderId }?.name ?: "Root"
+                            }
+
                             VaultTabContent(
                                 vaultText = vaultInputText,
                                 onVaultTextChange = { vaultInputText = it },
-                                savedEntries = filteredVaultEntries,
-                                onSaveEntry = {
+                                savedEntries = displayEntries,
+                                folders = savedVaultFolders,
+                                currentFolderId = currentFolderId,
+                                currentFolderName = currentFolderName,
+                                onCurrentFolderIdChange = { currentFolderId = it },
+                                onCreateFolder = { folderName ->
                                     coroutineScope.launch(Dispatchers.IO) {
-                                        repository.insertVaultEntry(VaultEntry(content = vaultInputText))
-                                        withContext(Dispatchers.Main) {
-                                            vaultInputText = ""
+                                        repository.insertVaultFolder(VaultFolder(name = folderName))
+                                    }
+                                },
+                                onDeleteFolder = { folder ->
+                                    coroutineScope.launch(Dispatchers.IO) {
+                                        repository.deleteVaultFolder(folder)
+                                        if (currentFolderId == folder.id) {
+                                            withContext(Dispatchers.Main) {
+                                                currentFolderId = null
+                                            }
+                                        }
+                                    }
+                                },
+                                onSaveEntry = {
+                                    if (vaultInputText.isNotBlank()) {
+                                        coroutineScope.launch(Dispatchers.IO) {
+                                            val currentEditing = editingEntry
+                                            if (currentEditing != null) {
+                                                val updated = currentEditing.copy(content = vaultInputText)
+                                                repository.updateVaultEntry(updated)
+                                                withContext(Dispatchers.Main) {
+                                                    editingEntry = null
+                                                    vaultInputText = ""
+                                                }
+                                            } else {
+                                                repository.insertVaultEntry(
+                                                    VaultEntry(
+                                                        content = vaultInputText,
+                                                        folderId = currentFolderId
+                                                    )
+                                                )
+                                                withContext(Dispatchers.Main) {
+                                                    vaultInputText = ""
+                                                }
+                                            }
                                         }
                                     }
                                 },
                                 onDeleteEntry = { entry ->
                                     coroutineScope.launch(Dispatchers.IO) {
                                         repository.deleteVaultEntry(entry)
+                                        if (editingEntry?.id == entry.id) {
+                                            withContext(Dispatchers.Main) {
+                                                editingEntry = null
+                                                vaultInputText = ""
+                                            }
+                                        }
                                     }
+                                },
+                                editingEntry = editingEntry,
+                                onStartEditing = { entry ->
+                                    editingEntry = entry
+                                    vaultInputText = entry?.content ?: ""
                                 },
                                 onScanScreen = {
                                     animateDismiss()
-                                    FloatingLauncherService.startOcrCapture(context)
+                                    FloatingLauncherService.startOcrCapture(context, currentFolderId)
                                 },
                                 accentColor = accentColor,
                                 ocrState = ocrState,
