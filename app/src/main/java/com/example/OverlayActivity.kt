@@ -14,7 +14,9 @@ import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -146,7 +148,7 @@ fun OverlayScreen(onDismiss: () -> Unit) {
     // to FloatingLauncherService which actually performs the capture+OCR.
     val mediaProjectionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
+    ) { result: ActivityResult ->
         val region = pendingCaptureRegion
         if (result.resultCode == Activity.RESULT_OK && result.data != null && region != null) {
             // Forward the result + region to the foreground service. The service:
