@@ -989,10 +989,80 @@ class FloatingLauncherService : Service() {
                 // 2. Initialize Tesseract
                 tessBaseAPI = TessBaseAPI()
                 val path = TessDataManager.getTessDataPath(this@FloatingLauncherService)
-                // Initialize with both English and Arabic support (eng+ara)
-                val initSuccess = tessBaseAPI.init(path, "eng+ara")
+
+                // --- START OF DETAILED DIAGNOSTIC LOGGING ---
+                android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] === TESSERACT INITIALIZATION DIAGNOSTICS ===")
+                android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] Path passed to init(): '$path'")
+                val parentDir = java.io.File(path)
+                android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] Path directory exists: ${parentDir.exists()}, isDirectory: ${parentDir.isDirectory}, canRead: ${parentDir.canRead()}, canWrite: ${parentDir.canWrite()}")
+
+                val tessDataDir = java.io.File(parentDir, "tessdata")
+                android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] Expected tessdata subfolder path: '${tessDataDir.absolutePath}'")
+                android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] tessdata subfolder exists: ${tessDataDir.exists()}, isDirectory: ${tessDataDir.isDirectory}")
+
+                if (tessDataDir.exists() && tessDataDir.isDirectory) {
+                    val files = tessDataDir.listFiles()
+                    android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] Files in tessdata subfolder (total: ${files?.size ?: 0}):")
+                    files?.forEach { file ->
+                        android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] - ${file.name}: size = ${file.length()} bytes, canRead = ${file.canRead()}")
+                    }
+                } else {
+                    android.util.Log.e("OrbitOCR", "[DIAGNOSTIC] tessdata subfolder is missing or is not a directory!")
+                }
+
+                val engFile = java.io.File(tessDataDir, "eng.traineddata")
+                val araFile = java.io.File(tessDataDir, "ara.traineddata")
+                android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] eng.traineddata: path='${engFile.absolutePath}', exists=${engFile.exists()}, size=${if (engFile.exists()) engFile.length() else -1} bytes, canRead=${engFile.canRead()}")
+                android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] ara.traineddata: path='${araFile.absolutePath}', exists=${araFile.exists()}, size=${if (araFile.exists()) araFile.length() else -1} bytes, canRead=${araFile.canRead()}")
+
+                // Diagnostic step: Try initializing with ONLY "eng" first on a temporary TessBaseAPI instance
+                android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] Attempting Tesseract init with ONLY 'eng' on a temporary instance...")
+                var tempEngSuccess = false
+                var tempEngLangs = "none"
+                var tempTess: TessBaseAPI? = null
+                try {
+                    tempTess = TessBaseAPI()
+                    tempEngSuccess = tempTess.init(path, "eng")
+                    tempEngLangs = if (tempEngSuccess) tempTess.getInitLanguagesAsString() ?: "none" else "none"
+                    android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] Temporary TessBaseAPI init 'eng' result: $tempEngSuccess, Loaded languages: $tempEngLangs")
+                } catch (e: Exception) {
+                    android.util.Log.e("OrbitOCR", "[DIAGNOSTIC] Temporary TessBaseAPI init 'eng' failed with exception", e)
+                } finally {
+                    try {
+                        tempTess?.recycle()
+                    } catch (ex: Exception) {
+                        ex.printStackTrace()
+                    }
+                }
+
+                // Now try the full initialization with ONLY "ara" (Step 4 isolation test)
+                android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] Attempting Tesseract init with ONLY 'ara' (Isolation Test)...")
+                var initSuccess = false
+                var loadedLangs = "none"
+                try {
+                    initSuccess = tessBaseAPI.init(path, "ara")
+                    loadedLangs = if (initSuccess) tessBaseAPI.getInitLanguagesAsString() ?: "none" else "none"
+                    android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] Tesseract init 'ara' result: $initSuccess, Loaded languages: $loadedLangs")
+                } catch (e: Exception) {
+                    android.util.Log.e("OrbitOCR", "[DIAGNOSTIC] Tesseract init 'ara' failed with exception", e)
+                    throw e
+                }
+
+                // Show detailed diagnostics via a long Toast message on the Main thread
+                val engSize = if (engFile.exists()) engFile.length() else -1L
+                val araSize = if (araFile.exists()) araFile.length() else -1L
+                val diagMsg = "TESSERACT DIAGNOSTICS:\n" +
+                              "1. Files: eng=${engFile.exists()}($engSize B), ara=${araFile.exists()}($araSize B)\n" +
+                              "2. Eng Init: $tempEngSuccess (Langs: $tempEngLangs)\n" +
+                              "3. Ara Init: $initSuccess (Langs: $loadedLangs)"
+                
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@FloatingLauncherService, diagMsg, Toast.LENGTH_LONG).show()
+                }
+                // --- END OF DETAILED DIAGNOSTIC LOGGING ---
+
                 if (!initSuccess) {
-                    throw Exception("Failed to initialize Tesseract API with languages eng+ara.")
+                    throw Exception("Failed to initialize Tesseract API with language ara.\nDiagnostics:\n$diagMsg")
                 }
 
                 // 3. Perform OCR

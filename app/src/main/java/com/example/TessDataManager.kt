@@ -28,14 +28,11 @@ object TessDataManager {
         for (lang in languages) {
             val destFile = File(tessDir, "$lang.traineddata")
             
-            // Get expected size directly from the asset file stream
-            val expectedSize = try {
-                context.assets.open("tessdata/$lang.traineddata").use { input ->
-                    input.available().toLong()
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to get asset size for $lang.traineddata", e)
-                0L
+            // Use known exact sizes of the assets to avoid unreliable .available() estimates from compressed streams
+            val expectedSize = when (lang) {
+                "eng" -> 4113088L
+                "ara" -> 1432056L
+                else -> 0L
             }
 
             Log.d(TAG, "Verifying $lang.traineddata. Expected size: $expectedSize, Current local size: ${if (destFile.exists()) destFile.length() else -1L}")
