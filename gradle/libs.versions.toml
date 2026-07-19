@@ -43,13 +43,6 @@ credentials = "1.5.0"
 googleid = "1.1.1"
 dynamicanimation = "1.0.0"
 browser = "1.8.0"
-# Tesseract4Android (eng+ara OCR) — pulled from JitPack
-# https://github.com/adaptech-cz/Tesseract4Android
-# IMPORTANT: this library publishes under its own Maven group `cz.adaptech.tesseract4android`
-# on JitPack (NOT the default `com.github.adaptech-cz` form). Using the wrong group was
-# the root cause of a previous build failure. Verified at:
-#   https://jitpack.io/api/builds/cz.adaptech/tesseract4android
-# Latest stable successful build as of 2025-06 is 4.9.0.
 tesseract4android = "4.9.0"
 
 
@@ -109,9 +102,6 @@ androidx-credentials = { group = "androidx.credentials", name = "credentials", v
 androidx-credentials-play-services = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentials" }
 googleid = { group = "com.google.android.libraries.identity.googleid", name = "googleid", version.ref = "googleid" }
 androidx-dynamicanimation = { group = "androidx.dynamicanimation", name = "dynamicanimation", version.ref = "dynamicanimation" }
-# Tesseract OCR engine with native ARM/x86 binaries, supports eng+ara via LSTM traineddata.
-# Coordinates verified against the official README at
-#   https://github.com/adaptech-cz/Tesseract4Android#dependencies
 tesseract4android = { group = "cz.adaptech.tesseract4android", name = "tesseract4android", version.ref = "tesseract4android" }
 
 

@@ -316,12 +316,6 @@ fun VaultTabContent(
     editingEntry: com.example.data.VaultEntry?,
     onStartEditing: (com.example.data.VaultEntry?) -> Unit,
     accentColor: Color,
-    /**
-     * Invoked when the user taps the "Scan Screen" button. The host (OverlayActivity)
-     * is responsible for showing the ScreenCaptureOverlay and kicking off the
-     * MediaProjection + OCR flow. The Vault tab itself does NOT touch MediaProjection
-     * or Tesseract — separation of concerns.
-     */
     onScanScreen: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -362,48 +356,6 @@ fun VaultTabContent(
             }
             Spacer(modifier = Modifier.height(6.dp))
         }
-
-        // Scan Screen button — full-width, accent-coloured, opens the OCR capture overlay.
-        // Sits above the compose section so it's prominent and always reachable.
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(accentColor.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
-                .border(1.dp, accentColor.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-                .clickable { onScanScreen() }
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Default.DocumentScanner,
-                contentDescription = "Scan Screen icon",
-                tint = accentColor,
-                modifier = Modifier.size(22.dp)
-            )
-            Spacer(modifier = Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Scan Screen (OCR)",
-                    color = Color.White,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "Capture a screen region and extract text (English + Arabic)",
-                    color = TextSecondary,
-                    fontSize = 11.sp
-                )
-            }
-            Icon(
-                imageVector = Icons.Default.CameraAlt,
-                contentDescription = "Capture",
-                tint = accentColor,
-                modifier = Modifier.size(20.dp)
-            )
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
 
         // Compose section
         Row(
@@ -447,6 +399,34 @@ fun VaultTabContent(
                     tint = if (vaultText.isNotBlank()) Color.Black else TextSecondary
                 )
             }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Scan Screen (OCR) button
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(accentColor.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+                .border(1.dp, accentColor.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                .clickable { onScanScreen() }
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.CameraAlt,
+                contentDescription = "Scan Screen",
+                tint = accentColor,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = "Scan Screen (OCR)",
+                color = accentColor,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
         }
 
         Spacer(modifier = Modifier.height(12.dp))

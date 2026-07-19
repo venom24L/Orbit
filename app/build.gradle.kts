@@ -127,12 +127,8 @@ dependencies {
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
-
-  // On-device OCR for the Vault "Scan Screen" feature.
-  // Tesseract4Android bundles native libs (arm64-v8a, armeabi-v7a, x86, x86_64) and
-  // the tessdata files are bundled under app/src/main/assets/tessdata/ (eng + ara).
-  // NOT ML Kit — ML Kit text recognition does not support Arabic, which was the
-  // root cause of a previous failed OCR attempt on this project.
+  // Tesseract4Android (JitPack) — on-device OCR with real Arabic support, unlike ML Kit's
+  // text recognizer which has no Arabic model. Used by the Vault "Scan Screen" feature.
   implementation(libs.tesseract4android)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
@@ -152,4 +148,69 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
+}
+
+// --- Tesseract OCR trained-data provisioning -------------------------------------------------
+//
+// Downloads eng.traineddata and ara.traineddata (LSTM "fast" models, Tesseract 5.x compatible)
+// from the official tesseract-ocr/tessdata_fast GitHub repository directly into
+// app/src/main/assets/tessdata/, then asserts each file is non-zero and at least as large as
+// the expected lower bound (see OcrConstants.ENG_TRAINEDDATA_MIN_BYTES / ARA_TRAINEDDATA_MIN_BYTES).
+//
+// This exists specifically because a previous attempt at this feature shipped 0-byte placeholder
+// trained-data files multiple times without anyone catching it. Making the download+verification
+// a real build task (rather than a one-off manual step) means it is structurally impossible to
+// ship broken/empty tessdata again: the build fails loudly instead.
+val tessdataDir = layout.projectDirectory.dir("src/main/assets/tessdata")
+val tessdataBaseUrl = "https://github.com/tesseract-ocr/tessdata_fast/raw/main"
+
+// Keep these in sync with OcrConstants.ENG_TRAINEDDATA_MIN_BYTES / ARA_TRAINEDDATA_MIN_BYTES.
+val engMinBytes = 3_500_000L
+val araMinBytes = 1_200_000L
+
+tasks.register("downloadAndVerifyTessdata") {
+    group = "ocr"
+    description = "Downloads and byte-size-verifies eng.traineddata and ara.traineddata for the Screen Text Extractor feature."
+
+    doLast {
+        val targetDir = tessdataDir.asFile
+        targetDir.mkdirs()
+
+        val files = mapOf(
+            "eng.traineddata" to engMinBytes,
+            "ara.traineddata" to araMinBytes
+        )
+
+        for ((fileName, minBytes) in files) {
+            val targetFile = File(targetDir, fileName)
+
+            val needsDownload = !targetFile.exists() || targetFile.length() < minBytes
+            if (needsDownload) {
+                logger.lifecycle("Downloading $fileName from tessdata_fast...")
+                val url = java.net.URL("$tessdataBaseUrl/$fileName")
+                url.openStream().use { input ->
+                    targetFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            }
+
+            val actualBytes = targetFile.length()
+            logger.lifecycle("Verified $fileName: $actualBytes bytes (minimum required: $minBytes bytes)")
+
+            if (actualBytes < minBytes) {
+                throw GradleException(
+                    "Tessdata verification FAILED for $fileName: got $actualBytes bytes, " +
+                    "expected at least $minBytes bytes. This file is likely empty/corrupt/truncated " +
+                    "and OCR would silently fail to initialize. Aborting build rather than shipping it."
+                )
+            }
+        }
+    }
+}
+
+// Run before every build so tessdata is always present and verified, without requiring a
+// manual step from the developer.
+tasks.named("preBuild") {
+    dependsOn("downloadAndVerifyTessdata")
 }

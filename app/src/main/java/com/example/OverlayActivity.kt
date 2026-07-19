@@ -1,12 +1,10 @@
 package com.example
 
-import android.app.Activity
 import android.app.AppOpsManager
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Rect
 import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Bundle
@@ -16,8 +14,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+<<<<<<< HEAD
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+=======
+>>>>>>> c93703b (Fix: restore real Tesseract trained data files (eng + ara))
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -50,8 +51,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.example.ui.theme.MyApplicationTheme
 import androidx.compose.ui.res.stringResource
 import com.example.R
-import com.example.capture.ScreenCaptureManager
-import com.example.capture.ScreenCaptureOverlay
 import com.example.ui.theme.CardDark
 import com.example.ui.theme.TextSecondary
 import kotlinx.coroutines.Dispatchers
@@ -129,6 +128,7 @@ fun OverlayScreen(onDismiss: () -> Unit) {
     var editingEntry by remember { mutableStateOf<VaultEntry?>(null) }
     val savedVaultFolders by repository.vaultFolders.collectAsState(initial = emptyList())
 
+<<<<<<< HEAD
     // ----------------------------------------------------------------
     // Scan Screen (OCR) flow state.
     //   - isScanOverlayVisible: when true, the full-screen translucent
@@ -185,6 +185,8 @@ fun OverlayScreen(onDismiss: () -> Unit) {
         }
     }
 
+=======
+>>>>>>> c93703b (Fix: restore real Tesseract trained data files (eng + ara))
     // Calculator tab states
     var calculatorInputText by rememberSaveable { mutableStateOf("") }
 
@@ -464,11 +466,13 @@ fun OverlayScreen(onDismiss: () -> Unit) {
                                 },
                                 accentColor = accentColor,
                                 onScanScreen = {
-                                    // Show the full-screen translucent selection overlay.
-                                    // The overlay's "Capture" callback handles both the
-                                    // "already have a projection" path (skip consent dialog)
-                                    // and the "need consent first" path (launch dialog).
-                                    isScanOverlayVisible = true
+                                    val intent = Intent(context, com.example.ocr.ScreenSelectionActivity::class.java).apply {
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    context.startActivity(intent)
+                                    // Dismiss this launchpad overlay immediately; ScreenSelectionActivity
+                                    // hides the bubble itself and reopens the Vault tab when the scan finishes.
+                                    animateDismiss()
                                 }
                             )
                         }
@@ -526,59 +530,6 @@ fun OverlayScreen(onDismiss: () -> Unit) {
                     Text(stringResource(id = R.string.overlay_close), color = TextSecondary, fontSize = 14.sp)
                 }
             }
-        }
-
-        // ----------------------------------------------------------------
-        // Scan Screen (OCR) overlay layer.
-        // Rendered on top of the launchpad Card when the user taps "Scan Screen".
-        // The overlay itself forces LTR internally (so Arabic UI mode does NOT
-        // mirror the selection rectangle). On "Capture" we either:
-        //   - Forward the region directly to the service if a MediaProjection is
-        //     already active (no consent re-prompt — fixes previous bug).
-        //   - Launch the consent dialog first; on result, forward to the service.
-        // ----------------------------------------------------------------
-        if (isScanOverlayVisible) {
-            ScreenCaptureOverlay(
-                onCancel = {
-                    isScanOverlayVisible = false
-                    pendingCaptureRegion = null
-                },
-                onCapture = { composeRect ->
-                    // Convert Compose's geometry Rect to android.graphics.Rect (Int),
-                    // matching the raw screen pixels MediaProjection will produce.
-                    val region = Rect(
-                        composeRect.left.toInt(),
-                        composeRect.top.toInt(),
-                        composeRect.right.toInt(),
-                        composeRect.bottom.toInt()
-                    )
-                    pendingCaptureRegion = region
-
-                    if (ScreenCaptureManager.hasActiveProjection()) {
-                        // Per-session consent already granted — skip the dialog and
-                        // fire the capture intent directly. This avoids re-prompting
-                        // the user on every single scan (previous failure mode).
-                        val serviceIntent = Intent(context, FloatingLauncherService::class.java).apply {
-                            action = FloatingLauncherService.ACTION_CAPTURE_SCREEN
-                            // Reuse the cached projection: pass RESULT_OK + null data.
-                            // The service's createProjection() will detect null data
-                            // and reuse the existing MediaProjection instance.
-                            putExtra(FloatingLauncherService.EXTRA_RESULT_CODE, Activity.RESULT_OK)
-                            putExtra(FloatingLauncherService.EXTRA_CAPTURE_REGION, region)
-                        }
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            context.startForegroundService(serviceIntent)
-                        } else {
-                            context.startService(serviceIntent)
-                        }
-                        animateDismiss()
-                    } else {
-                        // First scan this session — show the system consent dialog.
-                        val intent = ScreenCaptureManager.createScreenCaptureIntent(context)
-                        mediaProjectionLauncher.launch(intent)
-                    }
-                }
-            )
         }
     }
 }

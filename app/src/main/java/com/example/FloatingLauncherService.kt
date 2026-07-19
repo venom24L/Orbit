@@ -13,12 +13,10 @@ import android.content.IntentFilter
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.PixelFormat
-import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
-import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -49,17 +47,12 @@ import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.example.ui.theme.MyApplicationTheme
 import com.example.data.OrbitDatabase
-import com.example.data.VaultEntry
-import com.example.capture.ScreenCaptureManager
-import com.example.ocr.OcrManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlin.math.hypot
 
 class FloatingLauncherService : Service() {
@@ -86,39 +79,10 @@ class FloatingLauncherService : Service() {
     private var packageReceiver: BroadcastReceiver? = null
 
     companion object {
-        private const val TAG = "FloatingLauncherService"
         private const val CHANNEL_ID = "floating_launcher_channel"
-        private const val CAPTURE_CHANNEL_ID = "screen_capture_channel"
         private const val NOTIFICATION_ID = 4132
-        /** Separate notification ID for the screen-capture-in-progress foreground notification. */
-        private const val CAPTURE_NOTIFICATION_ID = 4133
         const val ACTION_UPDATE_THEME = "com.example.ACTION_UPDATE_THEME"
         const val ACTION_SHOW_BUBBLE = "com.example.ACTION_SHOW_BUBBLE"
-
-        /**
-         * New action: perform a single screen capture + OCR pass on the supplied region.
-         * Extras expected:
-         *   - [EXTRA_RESULT_CODE]: Int, the Activity result code from MediaProjectionManager.createScreenCaptureIntent()
-         *   - [EXTRA_RESULT_DATA]: Intent (Parcelable), the result data Intent from the same call
-         *   - [EXTRA_CAPTURE_REGION]: Rect (Parcelable), pixel coords of the region to capture+OCR
-         */
-        const val ACTION_CAPTURE_SCREEN = "com.example.ACTION_CAPTURE_SCREEN"
-        const val EXTRA_RESULT_CODE = "extra_result_code"
-        const val EXTRA_RESULT_DATA = "extra_result_data"
-        const val EXTRA_CAPTURE_REGION = "extra_capture_region"
-
-        /**
-         * Reliability delay between "UI fully dismissed" and "trigger MediaProjection capture".
-         *
-         * Why this exists: when the user taps "Capture", Orbit's overlay activity and bubble
-         * are still mid-dismiss-animation. If we capture immediately, the resulting frame
-         * contains Orbit's own UI instead of the underlying app the user wanted to scan.
-         * 350ms empirically gives both the overlay activity's exit animation AND the
-         * WindowManager's removal of the bubble enough time to complete on slow devices.
-         *
-         * Named (not a magic number) so callers can find / tune it in one place.
-         */
-        const val CAPTURE_SETTLE_DELAY_MS = 350L
 
         // Accessible from MainActivity to observe service lifecycle state in real-time
         val isServiceRunning = MutableStateFlow(false)
@@ -148,7 +112,6 @@ class FloatingLauncherService : Service() {
             return START_NOT_STICKY
         }
         createNotificationChannel()
-        // Default foreground start: bubble service, specialUse type.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID, 
@@ -166,9 +129,6 @@ class FloatingLauncherService : Service() {
             ACTION_SHOW_BUBBLE -> {
                 showBubble()
             }
-            ACTION_CAPTURE_SCREEN -> {
-                handleCaptureScreenIntent(intent)
-            }
             else -> {
                 if (isBubbleHidden) {
                     showBubble()
@@ -179,197 +139,6 @@ class FloatingLauncherService : Service() {
         }
 
         return START_STICKY
-    }
-
-    /**
-     * Handles [ACTION_CAPTURE_SCREEN]: promotes the foreground service to also include the
-     * mediaProjection type (required by Android 14+ within 10s of the activity-result being
-     * granted), hides the bubble, waits [CAPTURE_SETTLE_DELAY_MS], captures the requested
-     * region, runs OCR, saves the result into the Vault, restores the bubble, and reopens
-     * the OverlayActivity on the Vault tab so the user sees the new entry.
-     *
-     * Two entry paths:
-     *   - First scan this session: [EXTRA_RESULT_CODE] + [EXTRA_RESULT_DATA] both present.
-     *     We call [ScreenCaptureManager.createProjection] to build a fresh MediaProjection.
-     *   - Subsequent scans: [EXTRA_RESULT_DATA] is null because we reuse the cached
-     *     projection. We skip [createProjection] and go straight to capture. This avoids
-     *     re-prompting the user with the consent dialog on every single scan (previous
-     *     failure mode).
-     */
-    private fun handleCaptureScreenIntent(intent: Intent) {
-        val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
-        val resultData: Intent? = intent.getParcelableExtra(EXTRA_RESULT_DATA)
-        val region: Rect? = intent.getParcelableExtra(EXTRA_CAPTURE_REGION)
-
-        if (region == null) {
-            Log.e(TAG, "ACTION_CAPTURE_SCREEN missing required region extra; aborting")
-            restoreBubbleAndSpecialUseForeground()
-            return
-        }
-
-        // 1) Promote foreground service to include mediaProjection type. This MUST happen
-        //    within 10s of the user granting the projection consent dialog. On the
-        //    "reuse existing projection" path the projection was already granted earlier
-        //    this session, but we still need the foreground service type to be active
-        //    while we capture.
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val combinedType = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
-                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-                startForeground(
-                    CAPTURE_NOTIFICATION_ID,
-                    buildCaptureNotification(),
-                    combinedType
-                )
-            } else {
-                startForeground(CAPTURE_NOTIFICATION_ID, buildCaptureNotification())
-            }
-        } catch (t: Throwable) {
-            Log.e(TAG, "Failed to promote foreground service to mediaProjection type", t)
-        }
-
-        // 2) Build (or reuse) the MediaProjection.
-        if (resultData != null) {
-            // First scan this session — build a fresh projection from the consent result.
-            ScreenCaptureManager.createProjection(this, resultCode, resultData)
-        } else {
-            // Subsequent scan — projection should already be cached from a previous scan.
-            if (!ScreenCaptureManager.hasActiveProjection()) {
-                Log.e(TAG, "ACTION_CAPTURE_SCREEN: no resultData AND no cached projection; aborting")
-                restoreBubbleAndSpecialUseForeground()
-                return
-            }
-            Log.d(TAG, "Reusing cached MediaProjection for this scan")
-        }
-
-        // 3) Hide the bubble so it doesn't appear in the captured frame.
-        hideBubbleForCapture()
-
-        serviceScope.launch {
-            try {
-                // 4) Reliability delay — let the overlay activity's exit animation AND
-                //    the bubble's removal from WindowManager complete before we capture.
-                delay(CAPTURE_SETTLE_DELAY_MS)
-
-                // 5) Capture the region into an in-memory Bitmap. Never written to disk.
-                val bitmap = ScreenCaptureManager.captureRegion(this@FloatingLauncherService, region)
-
-                if (bitmap == null) {
-                    Log.e(TAG, "ScreenCaptureManager.captureRegion returned null; OCR aborted")
-                    withContext(Dispatchers.Main) {
-                        restoreBubbleAndSpecialUseForeground()
-                        reopenVaultTab()
-                    }
-                    return@launch
-                }
-
-                // 6) Run OCR (eng+ara via Tesseract). OcrManager handles preprocessing,
-                //    PSM_SINGLE_BLOCK, and native resource release internally.
-                val recognizedText = try {
-                    OcrManager.recognize(bitmap)
-                } catch (t: Throwable) {
-                    Log.e(TAG, "OcrManager.recognize threw", t)
-                    ""
-                } finally {
-                    bitmap.recycle()
-                }
-
-                Log.d(TAG, "OCR result length=${recognizedText.length}, first 60 chars='${recognizedText.take(60)}'")
-
-                // 7) Save the recognized text into the Vault as an OCR-sourced entry.
-                if (recognizedText.isNotBlank()) {
-                    val database = OrbitDatabase.getDatabase(this@FloatingLauncherService)
-                    database.vaultDao().insert(
-                        VaultEntry(
-                            content = recognizedText,
-                            source = "OCR",
-                            folderId = null
-                        )
-                    )
-                } else {
-                    Log.w(TAG, "OCR produced empty text; nothing saved to Vault")
-                }
-
-                // 8) Restore the bubble and revert the foreground notification to the
-                //    persistent-bubble specialUse form.
-                withContext(Dispatchers.Main) {
-                    restoreBubbleAndSpecialUseForeground()
-                    // 9) Reopen the OverlayActivity directly to the Vault tab so the user
-                    //    sees the newly-created entry immediately.
-                    reopenVaultTab()
-                }
-            } catch (t: Throwable) {
-                Log.e(TAG, "Capture+OCR flow failed", t)
-                withContext(Dispatchers.Main) {
-                    restoreBubbleAndSpecialUseForeground()
-                    reopenVaultTab()
-                }
-            }
-        }
-    }
-
-    /**
-     * Brings the bubble back to the screen and reverts the foreground notification to
-     * the persistent-bubble form (specialUse type only, NOTIFICATION_ID).
-     *
-     * Safe to call multiple times. Called at the end of every capture flow regardless
-     * of success/failure so the user is never left without their bubble.
-     */
-    private fun restoreBubbleAndSpecialUseForeground() {
-        try {
-            showBubble()
-        } catch (t: Throwable) {
-            Log.w(TAG, "showBubble() threw during restore", t)
-        }
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(
-                    NOTIFICATION_ID,
-                    buildNotification(isBubbleHidden),
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                )
-            } else {
-                startForeground(NOTIFICATION_ID, buildNotification(isBubbleHidden))
-            }
-            // Cancel the capture-specific notification since we're back to bubble mode.
-            val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            mgr.cancel(CAPTURE_NOTIFICATION_ID)
-        } catch (t: Throwable) {
-            Log.w(TAG, "Failed to restore specialUse foreground notification", t)
-        }
-    }
-
-    /**
-     * Reopens [OverlayActivity] and routes it directly to the Vault tab so the user
-     * immediately sees their freshly-OCR'd entry.
-     */
-    private fun reopenVaultTab() {
-        try {
-            val launchIntent = Intent(this, OverlayActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                putExtra("launch_tab", "vault")
-            }
-            startActivity(launchIntent)
-        } catch (t: Throwable) {
-            Log.w(TAG, "Failed to reopen OverlayActivity on Vault tab", t)
-        }
-    }
-
-    /**
-     * Hides the bubble specifically for the capture flow. Distinct from [hideBubble]
-     * because we want to forcibly hide even if [isViewAdded] is already false (defensive).
-     */
-    private fun hideBubbleForCapture() {
-        try {
-            if (isViewAdded && bubbleView != null) {
-                windowManager?.removeView(bubbleView)
-                isViewAdded = false
-                isBubbleHidden = true
-            }
-        } catch (t: Throwable) {
-            Log.w(TAG, "hideBubbleForCapture: removeView threw", t)
-        }
     }
 
     private fun registerScreenReceiver() {
@@ -454,6 +223,24 @@ class FloatingLauncherService : Service() {
         }
     }
 
+    /**
+     * Public entry point used by the OCR capture flow (see com.example.ocr.ScreenSelectionActivity)
+     * to restore the bubble after a scan completes. Delegates to the existing private logic so
+     * behavior stays identical to the manual show/hide path used elsewhere in this service.
+     */
+    fun showBubbleForOcrRestore() {
+        showBubble()
+    }
+
+    /**
+     * Public entry point used by the OCR capture flow to hide the bubble immediately before a
+     * screen capture, so the captured frame shows the underlying app/content rather than
+     * Orbit's own floating bubble.
+     */
+    fun hideBubbleForOcrCapture() {
+        hideBubble()
+    }
+
     private fun showBubble() {
         if (!Settings.canDrawOverlays(this)) {
             return
@@ -473,9 +260,6 @@ class FloatingLauncherService : Service() {
             } catch (e: Exception) {
                 e.printStackTrace()
             }
-        } else if (bubbleView == null) {
-            // Bubble was never created — build it fresh.
-            addFloatingBubble()
         }
     }
 
@@ -763,28 +547,15 @@ class FloatingLauncherService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-
-            // Channel 1: persistent bubble service
-            val bubbleChannel = NotificationChannel(
+            val channel = NotificationChannel(
                 CHANNEL_ID,
                 "Orbit Service Notifications",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "Keeps the floating quick launch bubble active over other apps."
             }
-            manager.createNotificationChannel(bubbleChannel)
-
-            // Channel 2: screen capture in progress (slightly higher importance so the
-            // user is reliably informed whenever OCR is reading their screen).
-            val captureChannel = NotificationChannel(
-                CAPTURE_CHANNEL_ID,
-                "Orbit Screen Capture",
-                NotificationManager.IMPORTANCE_DEFAULT
-            ).apply {
-                description = "Shown briefly while Orbit is reading text from your screen."
-            }
-            manager.createNotificationChannel(captureChannel)
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.createNotificationChannel(channel)
         }
     }
 
@@ -816,21 +587,6 @@ class FloatingLauncherService : Service() {
             .build()
     }
 
-    /**
-     * Foreground notification shown WHILE a screen capture + OCR pass is in progress.
-     * Uses [CAPTURE_CHANNEL_ID] and is cancelled once the capture flow completes and the
-     * service reverts to the persistent-bubble specialUse notification.
-     */
-    private fun buildCaptureNotification(): Notification {
-        return NotificationCompat.Builder(this, CAPTURE_CHANNEL_ID)
-            .setContentTitle("Orbit — Reading Screen")
-            .setContentText("Orbit is capturing a screen region for OCR. Your text stays on-device.")
-            .setSmallIcon(android.R.drawable.ic_menu_camera)
-            .setOngoing(true)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .build()
-    }
-
     private fun updateNotification(isBackgroundMode: Boolean) {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(NOTIFICATION_ID, buildNotification(isBackgroundMode))
@@ -845,13 +601,6 @@ class FloatingLauncherService : Service() {
         super.onDestroy()
         isServiceRunning.value = false
         instance = null
-
-        // Stop any active MediaProjection so we don't leak a VirtualDisplay.
-        try {
-            ScreenCaptureManager.stopProjection()
-        } catch (t: Throwable) {
-            Log.w(TAG, "ScreenCaptureManager.stopProjection threw on service destroy", t)
-        }
 
         // Unregister screen state listener dynamically to prevent memory leaks and battery drainage
         screenReceiver?.let {

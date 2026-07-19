@@ -7,7 +7,6 @@
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
-    <!-- Required by the Vault "Scan Screen" OCR feature: MediaProjection-based screen capture -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
@@ -20,7 +19,6 @@
     </queries>
 
     <application
-        android:name=".OrbitApp"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -49,20 +47,33 @@
             android:excludeFromRecents="true"
             android:launchMode="singleInstance" />
 
-        <!-- Foreground Service with special use type for the persistent bubble,
-             AND mediaProjection type for the Vault "Scan Screen" OCR feature.
-             Both types are declared together so the same service can host either the
-             persistent bubble notification or the screen-capture-in-progress notification
-             (only one foreground notification is shown at a time; we swap between them). -->
+        <!-- Foreground Service with special use type -->
         <service
             android:name=".FloatingLauncherService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="specialUse|mediaProjection">
+            android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Provides a persistent floating trigger bubble for users to quickly overlay and launch their apps" />
         </service>
+
+        <!-- Translucent activity hosting the Screen Text Extractor (OCR) selection overlay -->
+        <activity
+            android:name=".ocr.ScreenSelectionActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Translucent"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask" />
+
+        <!-- Foreground service holding the MediaProjection capture session for OCR scans.
+             Coexists with FloatingLauncherService's persistent bubble notification via a
+             separate notification channel/id (see OcrConstants). -->
+        <service
+            android:name=".ocr.ScreenCaptureService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
 
     </application>
 
