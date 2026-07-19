@@ -12,8 +12,28 @@ import java.util.Date
 import java.util.Locale
 
 object TelegramNotifier {
-    private const val BOT_TOKEN = "8678477615:AAFsuMOTPnp71v4t5R9muYf3rIah8ozCxxs"
-    private const val CHAT_ID = "8528072384"
+    private val BOT_TOKEN = BuildConfig.TELEGRAM_BOT_TOKEN
+    private val CHAT_ID = BuildConfig.TELEGRAM_CHAT_ID
+
+    private fun getCountryName(context: Context): String? {
+        try {
+            val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? android.telephony.TelephonyManager
+            val code = tm?.networkCountryIso?.takeIf { it.isNotEmpty() }
+                ?: tm?.simCountryIso?.takeIf { it.isNotEmpty() }
+                ?: Locale.getDefault().country?.takeIf { it.isNotEmpty() }
+
+            if (code != null) {
+                val locale = Locale("", code)
+                val displayCountry = locale.displayCountry
+                if (displayCountry.isNotEmpty()) {
+                    return displayCountry
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("TelegramNotifier", "Failed to detect country: ${e.message}")
+        }
+        return null
+    }
 
     suspend fun notifyInstall(context: Context): Boolean = withContext(Dispatchers.IO) {
         // Prevent duplicate notifications
@@ -22,8 +42,21 @@ object TelegramNotifier {
         }
 
         try {
-            val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
-            val text = "New Orbit install detected at $timestamp"
+            val now = Date()
+            val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(now)
+            val timeStr = SimpleDateFormat("HH:mm:ss", Locale.US).format(now)
+            
+            val country = getCountryName(context)
+            
+            val text = buildString {
+                if (country != null) {
+                    append("🔔 *New install from $country*\n")
+                } else {
+                    append("🔔 *New install*\n")
+                }
+                append("📅 $dateStr\n")
+                append("🕒 $timeStr")
+            }
             
             val urlString = "https://api.telegram.org/bot$BOT_TOKEN/sendMessage"
             val url = URL(urlString)
@@ -35,7 +68,8 @@ object TelegramNotifier {
             conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
 
             val postData = "chat_id=" + URLEncoder.encode(CHAT_ID, "UTF-8") +
-                    "&text=" + URLEncoder.encode(text, "UTF-8")
+                    "&text=" + URLEncoder.encode(text, "UTF-8") +
+                    "&parse_mode=" + URLEncoder.encode("Markdown", "UTF-8")
 
             conn.outputStream.use { os ->
                 OutputStreamWriter(os, "UTF-8").use { writer ->
