@@ -40,19 +40,57 @@ object TessDataManager {
             // If file does not exist or has incorrect size, re-copy it
             if (!destFile.exists() || destFile.length() != expectedSize || expectedSize == 0L) {
                 Log.d(TAG, "Copying or replacing $lang.traineddata from assets...")
+                
+                // One-time cleanup of any existing file to start fresh
                 if (destFile.exists()) {
                     val deleted = destFile.delete()
                     Log.d(TAG, "Deleted old/mismatched file: $deleted")
                 }
+
+                val tempFile = File(tessDir, "$lang.traineddata.tmp")
+                if (tempFile.exists()) {
+                    tempFile.delete()
+                }
+
                 try {
+                    var totalBytesRead = 0L
                     context.assets.open("tessdata/$lang.traineddata").use { input ->
-                        FileOutputStream(destFile).use { output ->
-                            input.copyTo(output)
+                        FileOutputStream(tempFile).use { output ->
+                            val buffer = ByteArray(1024 * 64) // 64KB buffer
+                            var bytesRead = input.read(buffer)
+                            while (bytesRead != -1) {
+                                output.write(buffer, 0, bytesRead)
+                                totalBytesRead += bytesRead
+                                bytesRead = input.read(buffer)
+                            }
+                            output.flush()
                         }
                     }
-                    Log.d(TAG, "Successfully copied $lang.traineddata. New size: ${destFile.length()}")
+
+                    Log.d(TAG, "Finished copying to temp file. Bytes read: $totalBytesRead, Temp file size: ${tempFile.length()}")
+
+                    if (totalBytesRead == 0L || tempFile.length() == 0L) {
+                        throw Exception("Copied 0 bytes for $lang.traineddata!")
+                    }
+
+                    if (expectedSize > 0L && tempFile.length() != expectedSize) {
+                        throw Exception("Copied size mismatch for $lang.traineddata! Expected: $expectedSize, Got: ${tempFile.length()}")
+                    }
+
+                    // Rename temp file to dest file
+                    val renamed = tempFile.renameTo(destFile)
+                    if (!renamed) {
+                        throw Exception("Failed to rename temporary file to ${destFile.name}")
+                    }
+                    Log.d(TAG, "Successfully copied and verified $lang.traineddata. Final size: ${destFile.length()}")
                 } catch (e: Exception) {
                     Log.e(TAG, "Error copying $lang.traineddata from assets", e)
+                    if (tempFile.exists()) {
+                        tempFile.delete()
+                    }
+                    if (destFile.exists()) {
+                        destFile.delete()
+                    }
                     success = false
                 }
             } else {
