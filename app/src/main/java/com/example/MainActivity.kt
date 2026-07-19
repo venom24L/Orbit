@@ -102,11 +102,12 @@ class MainActivity : ComponentActivity() {
             var showIntro by remember { mutableStateOf(!ThemePreferences.isIntroSeen(context)) }
             var showOnboarding by remember { mutableStateOf(ThemePreferences.isFirstRun(context)) }
 
-            val isFirstRun = remember { ThemePreferences.isFirstRun(context) }
-            LaunchedEffect(isFirstRun) {
-                if (isFirstRun) {
-                    android.widget.Toast.makeText(context, "The developer has been notified about you!", android.widget.Toast.LENGTH_LONG).show()
-                    TelegramNotifier.notifyInstall(context)
+            LaunchedEffect(Unit) {
+                if (!ThemePreferences.isInstallNotified(context)) {
+                    val sent = TelegramNotifier.notifyInstall(context)
+                    if (sent) {
+                        android.widget.Toast.makeText(context, "The developer has been notified about you!", android.widget.Toast.LENGTH_LONG).show()
+                    }
                 }
             }
             

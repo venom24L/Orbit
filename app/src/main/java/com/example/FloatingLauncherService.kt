@@ -13,10 +13,12 @@ import android.content.IntentFilter
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -48,38 +50,17 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.example.ui.theme.MyApplicationTheme
 import com.example.data.OrbitDatabase
 import com.example.data.VaultEntry
-import com.googlecode.tesseract.android.TessBaseAPI
-import android.graphics.Canvas
-import android.graphics.ColorMatrix
-import android.graphics.ColorMatrixColorFilter
-import android.graphics.Paint
-import android.media.ImageReader
-import android.hardware.display.VirtualDisplay
-import android.hardware.display.DisplayManager
-import android.graphics.Bitmap
-import android.util.DisplayMetrics
-import android.os.Handler
-import android.os.Looper
-import android.widget.Toast
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
+import com.example.capture.ScreenCaptureManager
+import com.example.ocr.OcrManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.hypot
-
-sealed class OcrModuleState {
-    object Undefined : OcrModuleState()
-    object Available : OcrModuleState()
-    object Pending : OcrModuleState()
-    data class Downloading(val progress: Int) : OcrModuleState()
-    object Installing : OcrModuleState()
-    object Completed : OcrModuleState()
-    data class Failed(val error: String) : OcrModuleState()
-}
 
 class FloatingLauncherService : Service() {
 
@@ -97,10 +78,6 @@ class FloatingLauncherService : Service() {
     
     private var springX: SpringAnimation? = null
 
-    // Tracking screen region selection overlay
-    private var selectionOverlayView: View? = null
-    private var selectionOverlayLifecycleOwner: ServiceLifecycleOwner? = null
-
     // Background scope to preload the cache without blocking the main UI thread
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -109,104 +86,45 @@ class FloatingLauncherService : Service() {
     private var packageReceiver: BroadcastReceiver? = null
 
     companion object {
+        private const val TAG = "FloatingLauncherService"
         private const val CHANNEL_ID = "floating_launcher_channel"
+        private const val CAPTURE_CHANNEL_ID = "screen_capture_channel"
         private const val NOTIFICATION_ID = 4132
+        /** Separate notification ID for the screen-capture-in-progress foreground notification. */
+        private const val CAPTURE_NOTIFICATION_ID = 4133
         const val ACTION_UPDATE_THEME = "com.example.ACTION_UPDATE_THEME"
         const val ACTION_SHOW_BUBBLE = "com.example.ACTION_SHOW_BUBBLE"
+
+        /**
+         * New action: perform a single screen capture + OCR pass on the supplied region.
+         * Extras expected:
+         *   - [EXTRA_RESULT_CODE]: Int, the Activity result code from MediaProjectionManager.createScreenCaptureIntent()
+         *   - [EXTRA_RESULT_DATA]: Intent (Parcelable), the result data Intent from the same call
+         *   - [EXTRA_CAPTURE_REGION]: Rect (Parcelable), pixel coords of the region to capture+OCR
+         */
+        const val ACTION_CAPTURE_SCREEN = "com.example.ACTION_CAPTURE_SCREEN"
+        const val EXTRA_RESULT_CODE = "extra_result_code"
+        const val EXTRA_RESULT_DATA = "extra_result_data"
+        const val EXTRA_CAPTURE_REGION = "extra_capture_region"
+
+        /**
+         * Reliability delay between "UI fully dismissed" and "trigger MediaProjection capture".
+         *
+         * Why this exists: when the user taps "Capture", Orbit's overlay activity and bubble
+         * are still mid-dismiss-animation. If we capture immediately, the resulting frame
+         * contains Orbit's own UI instead of the underlying app the user wanted to scan.
+         * 350ms empirically gives both the overlay activity's exit animation AND the
+         * WindowManager's removal of the bubble enough time to complete on slow devices.
+         *
+         * Named (not a magic number) so callers can find / tune it in one place.
+         */
+        const val CAPTURE_SETTLE_DELAY_MS = 350L
 
         // Accessible from MainActivity to observe service lifecycle state in real-time
         val isServiceRunning = MutableStateFlow(false)
 
-        val ocrModuleState = MutableStateFlow<OcrModuleState>(OcrModuleState.Undefined)
-        var activeOcrFolderId: Long? = null
-
-        fun downloadOcrModule(context: Context) {
-            ocrModuleState.value = OcrModuleState.Installing
-            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-            scope.launch {
-                try {
-                    val success = TessDataManager.ensureTessDataReady(context.applicationContext)
-                    if (success) {
-                        ocrModuleState.value = OcrModuleState.Available
-                    } else {
-                        ocrModuleState.value = OcrModuleState.Failed("Failed to initialize offline OCR language data.")
-                    }
-                } catch (e: Exception) {
-                    ocrModuleState.value = OcrModuleState.Failed(e.message ?: "Unknown error")
-                }
-            }
-        }
-
         @Volatile
         var instance: FloatingLauncherService? = null
-
-        // MediaProjection session
-        var mediaProjection: android.media.projection.MediaProjection? = null
-
-        fun promoteToMediaProjection() {
-            instance?.promoteToMediaProjectionInstance()
-        }
-
-        fun demoteFromMediaProjection() {
-            instance?.demoteFromMediaProjectionInstance()
-        }
-
-        // Named transition delay constant for real-device reliability
-        const val POST_DISMISSAL_DELAY_MS = 150L
-
-        private var onPermissionGrantedCallback: (() -> Unit)? = null
-        private var onPermissionDeniedCallback: (() -> Unit)? = null
-
-        fun onProjectionPermissionGranted() {
-            onPermissionGrantedCallback?.invoke()
-            onPermissionGrantedCallback = null
-            onPermissionDeniedCallback = null
-        }
-
-        fun onProjectionPermissionDenied() {
-            onPermissionDeniedCallback?.invoke()
-            onPermissionGrantedCallback = null
-            onPermissionDeniedCallback = null
-        }
-
-        fun startOcrCapture(context: Context, folderId: Long? = null) {
-            activeOcrFolderId = folderId
-            val service = instance
-            if (service == null) {
-                Toast.makeText(context, "Orbit Service is not running", Toast.LENGTH_SHORT).show()
-                return
-            }
-
-            if (mediaProjection != null) {
-                // Already have permission! Show selection overlay directly after post-dismissal delay
-                service.serviceScope.launch(Dispatchers.Main) {
-                    delay(POST_DISMISSAL_DELAY_MS)
-                    service.showSelectionOverlay()
-                }
-            } else {
-                // Request MediaProjection permission first
-                onPermissionGrantedCallback = {
-                    service.serviceScope.launch(Dispatchers.Main) {
-                        delay(POST_DISMISSAL_DELAY_MS)
-                        service.showSelectionOverlay()
-                    }
-                }
-                onPermissionDeniedCallback = {
-                    // Reopen OverlayActivity so user isn't stuck
-                    val reopenIntent = Intent(context, OverlayActivity::class.java).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                        putExtra("launch_tab", "vault")
-                    }
-                    context.startActivity(reopenIntent)
-                }
-
-                val intent = Intent(context, MediaProjectionHelperActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                context.startActivity(intent)
-            }
-        }
     }
 
     override fun onCreate() {
@@ -222,8 +140,6 @@ class FloatingLauncherService : Service() {
         serviceScope.launch {
             AppCache.getApps(this@FloatingLauncherService)
         }
-
-        downloadOcrModule(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -232,6 +148,7 @@ class FloatingLauncherService : Service() {
             return START_NOT_STICKY
         }
         createNotificationChannel()
+        // Default foreground start: bubble service, specialUse type.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID, 
@@ -249,6 +166,9 @@ class FloatingLauncherService : Service() {
             ACTION_SHOW_BUBBLE -> {
                 showBubble()
             }
+            ACTION_CAPTURE_SCREEN -> {
+                handleCaptureScreenIntent(intent)
+            }
             else -> {
                 if (isBubbleHidden) {
                     showBubble()
@@ -259,6 +179,197 @@ class FloatingLauncherService : Service() {
         }
 
         return START_STICKY
+    }
+
+    /**
+     * Handles [ACTION_CAPTURE_SCREEN]: promotes the foreground service to also include the
+     * mediaProjection type (required by Android 14+ within 10s of the activity-result being
+     * granted), hides the bubble, waits [CAPTURE_SETTLE_DELAY_MS], captures the requested
+     * region, runs OCR, saves the result into the Vault, restores the bubble, and reopens
+     * the OverlayActivity on the Vault tab so the user sees the new entry.
+     *
+     * Two entry paths:
+     *   - First scan this session: [EXTRA_RESULT_CODE] + [EXTRA_RESULT_DATA] both present.
+     *     We call [ScreenCaptureManager.createProjection] to build a fresh MediaProjection.
+     *   - Subsequent scans: [EXTRA_RESULT_DATA] is null because we reuse the cached
+     *     projection. We skip [createProjection] and go straight to capture. This avoids
+     *     re-prompting the user with the consent dialog on every single scan (previous
+     *     failure mode).
+     */
+    private fun handleCaptureScreenIntent(intent: Intent) {
+        val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
+        val resultData: Intent? = intent.getParcelableExtra(EXTRA_RESULT_DATA)
+        val region: Rect? = intent.getParcelableExtra(EXTRA_CAPTURE_REGION)
+
+        if (region == null) {
+            Log.e(TAG, "ACTION_CAPTURE_SCREEN missing required region extra; aborting")
+            restoreBubbleAndSpecialUseForeground()
+            return
+        }
+
+        // 1) Promote foreground service to include mediaProjection type. This MUST happen
+        //    within 10s of the user granting the projection consent dialog. On the
+        //    "reuse existing projection" path the projection was already granted earlier
+        //    this session, but we still need the foreground service type to be active
+        //    while we capture.
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val combinedType = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
+                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                startForeground(
+                    CAPTURE_NOTIFICATION_ID,
+                    buildCaptureNotification(),
+                    combinedType
+                )
+            } else {
+                startForeground(CAPTURE_NOTIFICATION_ID, buildCaptureNotification())
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Failed to promote foreground service to mediaProjection type", t)
+        }
+
+        // 2) Build (or reuse) the MediaProjection.
+        if (resultData != null) {
+            // First scan this session — build a fresh projection from the consent result.
+            ScreenCaptureManager.createProjection(this, resultCode, resultData)
+        } else {
+            // Subsequent scan — projection should already be cached from a previous scan.
+            if (!ScreenCaptureManager.hasActiveProjection()) {
+                Log.e(TAG, "ACTION_CAPTURE_SCREEN: no resultData AND no cached projection; aborting")
+                restoreBubbleAndSpecialUseForeground()
+                return
+            }
+            Log.d(TAG, "Reusing cached MediaProjection for this scan")
+        }
+
+        // 3) Hide the bubble so it doesn't appear in the captured frame.
+        hideBubbleForCapture()
+
+        serviceScope.launch {
+            try {
+                // 4) Reliability delay — let the overlay activity's exit animation AND
+                //    the bubble's removal from WindowManager complete before we capture.
+                delay(CAPTURE_SETTLE_DELAY_MS)
+
+                // 5) Capture the region into an in-memory Bitmap. Never written to disk.
+                val bitmap = ScreenCaptureManager.captureRegion(this@FloatingLauncherService, region)
+
+                if (bitmap == null) {
+                    Log.e(TAG, "ScreenCaptureManager.captureRegion returned null; OCR aborted")
+                    withContext(Dispatchers.Main) {
+                        restoreBubbleAndSpecialUseForeground()
+                        reopenVaultTab()
+                    }
+                    return@launch
+                }
+
+                // 6) Run OCR (eng+ara via Tesseract). OcrManager handles preprocessing,
+                //    PSM_SINGLE_BLOCK, and native resource release internally.
+                val recognizedText = try {
+                    OcrManager.recognize(bitmap)
+                } catch (t: Throwable) {
+                    Log.e(TAG, "OcrManager.recognize threw", t)
+                    ""
+                } finally {
+                    bitmap.recycle()
+                }
+
+                Log.d(TAG, "OCR result length=${recognizedText.length}, first 60 chars='${recognizedText.take(60)}'")
+
+                // 7) Save the recognized text into the Vault as an OCR-sourced entry.
+                if (recognizedText.isNotBlank()) {
+                    val database = OrbitDatabase.getDatabase(this@FloatingLauncherService)
+                    database.vaultDao().insert(
+                        VaultEntry(
+                            content = recognizedText,
+                            source = "OCR",
+                            folderId = null
+                        )
+                    )
+                } else {
+                    Log.w(TAG, "OCR produced empty text; nothing saved to Vault")
+                }
+
+                // 8) Restore the bubble and revert the foreground notification to the
+                //    persistent-bubble specialUse form.
+                withContext(Dispatchers.Main) {
+                    restoreBubbleAndSpecialUseForeground()
+                    // 9) Reopen the OverlayActivity directly to the Vault tab so the user
+                    //    sees the newly-created entry immediately.
+                    reopenVaultTab()
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "Capture+OCR flow failed", t)
+                withContext(Dispatchers.Main) {
+                    restoreBubbleAndSpecialUseForeground()
+                    reopenVaultTab()
+                }
+            }
+        }
+    }
+
+    /**
+     * Brings the bubble back to the screen and reverts the foreground notification to
+     * the persistent-bubble form (specialUse type only, NOTIFICATION_ID).
+     *
+     * Safe to call multiple times. Called at the end of every capture flow regardless
+     * of success/failure so the user is never left without their bubble.
+     */
+    private fun restoreBubbleAndSpecialUseForeground() {
+        try {
+            showBubble()
+        } catch (t: Throwable) {
+            Log.w(TAG, "showBubble() threw during restore", t)
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    buildNotification(isBubbleHidden),
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, buildNotification(isBubbleHidden))
+            }
+            // Cancel the capture-specific notification since we're back to bubble mode.
+            val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            mgr.cancel(CAPTURE_NOTIFICATION_ID)
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to restore specialUse foreground notification", t)
+        }
+    }
+
+    /**
+     * Reopens [OverlayActivity] and routes it directly to the Vault tab so the user
+     * immediately sees their freshly-OCR'd entry.
+     */
+    private fun reopenVaultTab() {
+        try {
+            val launchIntent = Intent(this, OverlayActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                putExtra("launch_tab", "vault")
+            }
+            startActivity(launchIntent)
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to reopen OverlayActivity on Vault tab", t)
+        }
+    }
+
+    /**
+     * Hides the bubble specifically for the capture flow. Distinct from [hideBubble]
+     * because we want to forcibly hide even if [isViewAdded] is already false (defensive).
+     */
+    private fun hideBubbleForCapture() {
+        try {
+            if (isViewAdded && bubbleView != null) {
+                windowManager?.removeView(bubbleView)
+                isViewAdded = false
+                isBubbleHidden = true
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "hideBubbleForCapture: removeView threw", t)
+        }
     }
 
     private fun registerScreenReceiver() {
@@ -362,6 +473,9 @@ class FloatingLauncherService : Service() {
             } catch (e: Exception) {
                 e.printStackTrace()
             }
+        } else if (bubbleView == null) {
+            // Bubble was never created — build it fresh.
+            addFloatingBubble()
         }
     }
 
@@ -649,15 +763,28 @@ class FloatingLauncherService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+            // Channel 1: persistent bubble service
+            val bubbleChannel = NotificationChannel(
                 CHANNEL_ID,
                 "Orbit Service Notifications",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "Keeps the floating quick launch bubble active over other apps."
             }
-            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            manager.createNotificationChannel(channel)
+            manager.createNotificationChannel(bubbleChannel)
+
+            // Channel 2: screen capture in progress (slightly higher importance so the
+            // user is reliably informed whenever OCR is reading their screen).
+            val captureChannel = NotificationChannel(
+                CAPTURE_CHANNEL_ID,
+                "Orbit Screen Capture",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "Shown briefly while Orbit is reading text from your screen."
+            }
+            manager.createNotificationChannel(captureChannel)
         }
     }
 
@@ -689,428 +816,26 @@ class FloatingLauncherService : Service() {
             .build()
     }
 
+    /**
+     * Foreground notification shown WHILE a screen capture + OCR pass is in progress.
+     * Uses [CAPTURE_CHANNEL_ID] and is cancelled once the capture flow completes and the
+     * service reverts to the persistent-bubble specialUse notification.
+     */
+    private fun buildCaptureNotification(): Notification {
+        return NotificationCompat.Builder(this, CAPTURE_CHANNEL_ID)
+            .setContentTitle("Orbit — Reading Screen")
+            .setContentText("Orbit is capturing a screen region for OCR. Your text stays on-device.")
+            .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .setOngoing(true)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .build()
+    }
+
     private fun updateNotification(isBackgroundMode: Boolean) {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(NOTIFICATION_ID, buildNotification(isBackgroundMode))
     }
 
-    fun promoteToMediaProjectionInstance() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                buildNotification(isBubbleHidden),
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-            )
-        }
-    }
-
-    fun demoteFromMediaProjectionInstance() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                buildNotification(isBubbleHidden),
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            )
-        }
-    }
-
-    private fun showSelectionOverlay() {
-        val context = this
-        val lifecycleOwner = ServiceLifecycleOwner()
-        selectionOverlayLifecycleOwner = lifecycleOwner
-
-        var composeView: ComposeView? = null
-        composeView = ComposeView(context).apply {
-            setViewTreeLifecycleOwner(lifecycleOwner)
-            setViewTreeSavedStateRegistryOwner(lifecycleOwner)
-            setViewTreeViewModelStoreOwner(lifecycleOwner)
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            setContent {
-                val currentTheme = ThemePreferences.getSelectedTheme(context)
-                MyApplicationTheme(accentColor = currentTheme.getColor()) {
-                    SelectionOverlayUI(
-                        accentColor = currentTheme.getColor(),
-                        onCancel = {
-                            removeSelectionOverlay()
-                        },
-                        onCapture = { left, top, right, bottom ->
-                            // Temporarily hide the overlay view to get a clean screenshot of the background app
-                            composeView?.visibility = View.GONE
-                            
-                            // Allow UI thread a frame to fully hide the overlay
-                            Handler(Looper.getMainLooper()).postDelayed({
-                                performScreenCapture(
-                                    left = left,
-                                    top = top,
-                                    right = right,
-                                    bottom = bottom,
-                                    onSuccess = { croppedBitmap ->
-                                        // Bring back or remove the overlay
-                                        removeSelectionOverlay()
-                                        processOcrAndSave(croppedBitmap)
-                                    },
-                                    onError = { error ->
-                                        composeView?.visibility = View.VISIBLE
-                                        Toast.makeText(context, "Capture failed: ${error.message}", Toast.LENGTH_SHORT).show()
-                                    }
-                                )
-                            }, 50)
-                        }
-                    )
-                }
-            }
-        }
-        selectionOverlayView = composeView
-
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            } else {
-                @Suppress("DEPRECATION")
-                WindowManager.LayoutParams.TYPE_PHONE
-            },
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        )
-
-        try {
-            windowManager?.addView(composeView, params)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(this, "Failed to display selection overlay", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun removeSelectionOverlay() {
-        selectionOverlayView?.let { view ->
-            try {
-                windowManager?.removeViewImmediate(view)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-        selectionOverlayView = null
-        selectionOverlayLifecycleOwner?.onDestroy()
-        selectionOverlayLifecycleOwner = null
-    }
-
-    private fun performScreenCapture(
-        left: Float,
-        top: Float,
-        right: Float,
-        bottom: Float,
-        onSuccess: (Bitmap) -> Unit,
-        onError: (Throwable) -> Unit
-    ) {
-        val projection = mediaProjection
-        if (projection == null) {
-            onError(IllegalStateException("MediaProjection is not initialized or expired"))
-            return
-        }
-
-        val displayMetrics = resources.displayMetrics
-        val screenWidth = displayMetrics.widthPixels
-        val screenHeight = displayMetrics.heightPixels
-        val densityDpi = displayMetrics.densityDpi
-
-        val imageReader = ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
-        var virtualDisplay: android.hardware.display.VirtualDisplay? = null
-        
-        val projectionCallback = object : android.media.projection.MediaProjection.Callback() {
-            override fun onStop() {
-                super.onStop()
-                try {
-                    virtualDisplay?.release()
-                    virtualDisplay = null
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-                try {
-                    imageReader.close()
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
-        }
-
-        try {
-            // Register callback BEFORE starting capture (Required on Android 14+ / API 34+)
-            projection.registerCallback(projectionCallback, Handler(Looper.getMainLooper()))
-
-            var captureDone = false
-            imageReader.setOnImageAvailableListener({ reader ->
-                if (captureDone) return@setOnImageAvailableListener
-                captureDone = true
-                
-                try {
-                    val image = reader.acquireLatestImage()
-                    if (image != null) {
-                        val planes = image.planes
-                        val buffer = planes[0].buffer
-                        val pixelStride = planes[0].pixelStride
-                        val rowStride = planes[0].rowStride
-                        val rowPadding = rowStride - pixelStride * screenWidth
-                        
-                        val fullBitmap = Bitmap.createBitmap(
-                            screenWidth + rowPadding / pixelStride,
-                            screenHeight,
-                            Bitmap.Config.ARGB_8888
-                        )
-                        fullBitmap.copyPixelsFromBuffer(buffer)
-                        image.close()
-
-                        // Crop to screenWidth and screenHeight first to discard trailing padding
-                        val cleanFullBitmap = Bitmap.createBitmap(fullBitmap, 0, 0, screenWidth, screenHeight)
-                        if (cleanFullBitmap != fullBitmap) {
-                            fullBitmap.recycle()
-                        }
-
-                        // Coerce bounds to screen size
-                        val cropLeft = left.coerceIn(0f, screenWidth.toFloat()).toInt()
-                        val cropTop = top.coerceIn(0f, screenHeight.toFloat()).toInt()
-                        val cropWidth = (right - left).coerceIn(10f, (screenWidth - cropLeft).toFloat()).toInt()
-                        val cropHeight = (bottom - top).coerceIn(10f, (screenHeight - cropTop).toFloat()).toInt()
-
-                        val croppedBitmap = Bitmap.createBitmap(cleanFullBitmap, cropLeft, cropTop, cropWidth, cropHeight)
-                        cleanFullBitmap.recycle()
-
-                        onSuccess(croppedBitmap)
-                    } else {
-                        onError(Exception("Failed to acquire latest image frame"))
-                    }
-                } catch (e: Exception) {
-                    onError(e)
-                } finally {
-                    try {
-                        projection.unregisterCallback(projectionCallback)
-                    } catch (ex: Exception) {
-                        ex.printStackTrace()
-                    }
-                    virtualDisplay?.release()
-                    imageReader.close()
-
-                    // On Android 14+ (API >= 34), a MediaProjection is single-use and consumed.
-                    // Stop it now so the callback nullifies FloatingLauncherService.mediaProjection,
-                    // allowing the next scan to acquire a fresh valid session.
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                        try {
-                            projection.stop()
-                        } catch (ex: Exception) {
-                            ex.printStackTrace()
-                        }
-                    }
-                }
-            }, Handler(Looper.getMainLooper()))
-
-            virtualDisplay = projection.createVirtualDisplay(
-                "OrbitCapture",
-                screenWidth,
-                screenHeight,
-                densityDpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                imageReader.surface,
-                null,
-                null
-            )
-        } catch (e: Exception) {
-            try {
-                projection.unregisterCallback(projectionCallback)
-            } catch (ex: Exception) {
-                ex.printStackTrace()
-            }
-            virtualDisplay?.release()
-            imageReader.close()
-
-            // On Android 14+ (API >= 34), stop the projection on immediate error too
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                try {
-                    projection.stop()
-                } catch (ex: Exception) {
-                    ex.printStackTrace()
-                }
-            }
-            onError(e)
-        }
-    }
-
-    private fun preprocessBitmap(src: Bitmap): Bitmap {
-        val width = src.width
-        val height = src.height
-        val dest = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(dest)
-        val paint = Paint()
-
-        // 1. Convert to Grayscale
-        val grayscaleMatrix = ColorMatrix().apply {
-            setSaturation(0f)
-        }
-
-        // 2. Boost Contrast to make text extremely sharp and clear
-        val contrast = 1.8f
-        val translate = -128f * contrast + 128f
-        val contrastMatrix = ColorMatrix(floatArrayOf(
-            contrast, 0f, 0f, 0f, translate,
-            0f, contrast, 0f, 0f, translate,
-            0f, 0f, contrast, 0f, translate,
-            0f, 0f, 0f, 1f, 0f
-        ))
-
-        grayscaleMatrix.postConcat(contrastMatrix)
-        paint.colorFilter = ColorMatrixColorFilter(grayscaleMatrix)
-
-        canvas.drawBitmap(src, 0f, 0f, paint)
-        return dest
-    }
-
-    private fun processOcrAndSave(bitmap: Bitmap, retryCount: Int = 0) {
-        // Run Tesseract processing on a background default thread
-        serviceScope.launch(Dispatchers.Default) {
-            var tessBaseAPI: TessBaseAPI? = null
-            var preprocessedBitmap: Bitmap? = null
-            try {
-                // Ensure training data files are fully copied from assets
-                val dataReady = TessDataManager.ensureTessDataReady(this@FloatingLauncherService)
-                if (!dataReady) {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(this@FloatingLauncherService, "OCR language data could not be initialized.", Toast.LENGTH_SHORT).show()
-                    }
-                    bitmap.recycle()
-                    return@launch
-                }
-
-                // 1. Preprocess Bitmap (grayscale + contrast correction)
-                preprocessedBitmap = preprocessBitmap(bitmap)
-                bitmap.recycle() // Recycle original immediately
-
-                // 2. Initialize Tesseract
-                tessBaseAPI = TessBaseAPI()
-                val path = TessDataManager.getTessDataPath(this@FloatingLauncherService)
-
-                // --- START OF DETAILED DIAGNOSTIC LOGGING ---
-                android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] === TESSERACT INITIALIZATION DIAGNOSTICS ===")
-                android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] Path passed to init(): '$path'")
-                val parentDir = java.io.File(path)
-                android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] Path directory exists: ${parentDir.exists()}, isDirectory: ${parentDir.isDirectory}, canRead: ${parentDir.canRead()}, canWrite: ${parentDir.canWrite()}")
-
-                val tessDataDir = java.io.File(parentDir, "tessdata")
-                android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] Expected tessdata subfolder path: '${tessDataDir.absolutePath}'")
-                android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] tessdata subfolder exists: ${tessDataDir.exists()}, isDirectory: ${tessDataDir.isDirectory}")
-
-                if (tessDataDir.exists() && tessDataDir.isDirectory) {
-                    val files = tessDataDir.listFiles()
-                    android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] Files in tessdata subfolder (total: ${files?.size ?: 0}):")
-                    files?.forEach { file ->
-                        android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] - ${file.name}: size = ${file.length()} bytes, canRead = ${file.canRead()}")
-                    }
-                } else {
-                    android.util.Log.e("OrbitOCR", "[DIAGNOSTIC] tessdata subfolder is missing or is not a directory!")
-                }
-
-                val engFile = java.io.File(tessDataDir, "eng.traineddata")
-                val araFile = java.io.File(tessDataDir, "ara.traineddata")
-                android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] eng.traineddata: path='${engFile.absolutePath}', exists=${engFile.exists()}, size=${if (engFile.exists()) engFile.length() else -1} bytes, canRead=${engFile.canRead()}")
-                android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] ara.traineddata: path='${araFile.absolutePath}', exists=${araFile.exists()}, size=${if (araFile.exists()) araFile.length() else -1} bytes, canRead=${araFile.canRead()}")
-
-                // Diagnostic step: Try initializing with ONLY "eng" first on a temporary TessBaseAPI instance
-                android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] Attempting Tesseract init with ONLY 'eng' on a temporary instance...")
-                var tempEngSuccess = false
-                var tempEngLangs = "none"
-                var tempTess: TessBaseAPI? = null
-                try {
-                    tempTess = TessBaseAPI()
-                    tempEngSuccess = tempTess.init(path, "eng")
-                    tempEngLangs = if (tempEngSuccess) tempTess.getInitLanguagesAsString() ?: "none" else "none"
-                    android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] Temporary TessBaseAPI init 'eng' result: $tempEngSuccess, Loaded languages: $tempEngLangs")
-                } catch (e: Exception) {
-                    android.util.Log.e("OrbitOCR", "[DIAGNOSTIC] Temporary TessBaseAPI init 'eng' failed with exception", e)
-                } finally {
-                    try {
-                        tempTess?.recycle()
-                    } catch (ex: Exception) {
-                        ex.printStackTrace()
-                    }
-                }
-
-                // Now try the full initialization with ONLY "ara" (Step 4 isolation test)
-                android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] Attempting Tesseract init with ONLY 'ara' (Isolation Test)...")
-                var initSuccess = false
-                var loadedLangs = "none"
-                try {
-                    initSuccess = tessBaseAPI.init(path, "ara")
-                    loadedLangs = if (initSuccess) tessBaseAPI.getInitLanguagesAsString() ?: "none" else "none"
-                    android.util.Log.d("OrbitOCR", "[DIAGNOSTIC] Tesseract init 'ara' result: $initSuccess, Loaded languages: $loadedLangs")
-                } catch (e: Exception) {
-                    android.util.Log.e("OrbitOCR", "[DIAGNOSTIC] Tesseract init 'ara' failed with exception", e)
-                    throw e
-                }
-
-                // Show detailed diagnostics via a long Toast message on the Main thread
-                val engSize = if (engFile.exists()) engFile.length() else -1L
-                val araSize = if (araFile.exists()) araFile.length() else -1L
-                val diagMsg = "TESSERACT DIAGNOSTICS:\n" +
-                              "1. Files: eng=${engFile.exists()}($engSize B), ara=${araFile.exists()}($araSize B)\n" +
-                              "2. Eng Init: $tempEngSuccess (Langs: $tempEngLangs)\n" +
-                              "3. Ara Init: $initSuccess (Langs: $loadedLangs)"
-                
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@FloatingLauncherService, diagMsg, Toast.LENGTH_LONG).show()
-                }
-                // --- END OF DETAILED DIAGNOSTIC LOGGING ---
-
-                if (!initSuccess) {
-                    throw Exception("Failed to initialize Tesseract API with language ara.\nDiagnostics:\n$diagMsg")
-                }
-
-                // 3. Perform OCR
-                tessBaseAPI.setImage(preprocessedBitmap)
-                val text = tessBaseAPI.getUTF8Text()
-
-                // Clean up preprocessed bitmap
-                preprocessedBitmap.recycle()
-                preprocessedBitmap = null
-
-                withContext(Dispatchers.Main) {
-                    if (!text.isNullOrBlank()) {
-                        serviceScope.launch(Dispatchers.IO) {
-                            val db = OrbitDatabase.getDatabase(this@FloatingLauncherService)
-                            // Add new Tesseract OCR-sourced item to the Room database
-                            db.vaultDao().insert(VaultEntry(content = text, source = "OCR", folderId = activeOcrFolderId))
-                            
-                            withContext(Dispatchers.Main) {
-                                Toast.makeText(this@FloatingLauncherService, "Text extracted & saved to Vault!", Toast.LENGTH_SHORT).show()
-                                
-                                // Smoothly bring back OverlayActivity to the Vault tab
-                                val reopenIntent = Intent(this@FloatingLauncherService, OverlayActivity::class.java).apply {
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                                    putExtra("launch_tab", "vault")
-                                }
-                                startActivity(reopenIntent)
-                            }
-                        }
-                    } else {
-                        Toast.makeText(this@FloatingLauncherService, "No text detected in selection region.", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("OrbitOCR", "OCR processing failed", e)
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@FloatingLauncherService, "OCR Failed: ${e.message}", Toast.LENGTH_SHORT).show()
-                }
-            } finally {
-                preprocessedBitmap?.recycle()
-                try {
-                    tessBaseAPI?.recycle()
-                } catch (ex: Exception) {
-                    ex.printStackTrace()
-                }
-            }
-        }
-    }
 
     private fun dpToPx(dp: Float, context: Context): Int {
         return (dp * context.resources.displayMetrics.density).toInt()
@@ -1121,16 +846,12 @@ class FloatingLauncherService : Service() {
         isServiceRunning.value = false
         instance = null
 
-        // Stop any running MediaProjection session and release references
+        // Stop any active MediaProjection so we don't leak a VirtualDisplay.
         try {
-            mediaProjection?.stop()
-            mediaProjection = null
-        } catch (e: Exception) {
-            e.printStackTrace()
+            ScreenCaptureManager.stopProjection()
+        } catch (t: Throwable) {
+            Log.w(TAG, "ScreenCaptureManager.stopProjection threw on service destroy", t)
         }
-
-        // Clean up screen selection overlay
-        removeSelectionOverlay()
 
         // Unregister screen state listener dynamically to prevent memory leaks and battery drainage
         screenReceiver?.let {

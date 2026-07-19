@@ -7,6 +7,7 @@
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <!-- Required by the Vault "Scan Screen" OCR feature: MediaProjection-based screen capture -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
@@ -19,6 +20,7 @@
     </queries>
 
     <application
+        android:name=".OrbitApp"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -47,18 +49,11 @@
             android:excludeFromRecents="true"
             android:launchMode="singleInstance" />
 
-        <!-- Helper activity for MediaProjection permission -->
-        <activity
-            android:name=".MediaProjectionHelperActivity"
-            android:exported="false"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar"
-            android:excludeFromRecents="true" />
-
-        <meta-data
-            android:name="com.google.mlkit.vision.DEPENDENCIES"
-            android:value="ocr" />
-
-        <!-- Foreground Service with special use and media projection types -->
+        <!-- Foreground Service with special use type for the persistent bubble,
+             AND mediaProjection type for the Vault "Scan Screen" OCR feature.
+             Both types are declared together so the same service can host either the
+             persistent bubble notification or the screen-capture-in-progress notification
+             (only one foreground notification is shown at a time; we swap between them). -->
         <service
             android:name=".FloatingLauncherService"
             android:enabled="true"

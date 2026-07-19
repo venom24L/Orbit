@@ -127,7 +127,13 @@ dependencies {
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
-  implementation("com.github.adaptech-cz.Tesseract4Android:tesseract4android:4.7.0")
+
+  // On-device OCR for the Vault "Scan Screen" feature.
+  // Tesseract4Android bundles native libs (arm64-v8a, armeabi-v7a, x86, x86_64) and
+  // the tessdata files are bundled under app/src/main/assets/tessdata/ (eng + ara).
+  // NOT ML Kit — ML Kit text recognition does not support Arabic, which was the
+  // root cause of a previous failed OCR attempt on this project.
+  implementation(libs.tesseract4android)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

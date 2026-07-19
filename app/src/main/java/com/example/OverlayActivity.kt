@@ -1,10 +1,12 @@
 package com.example
 
+import android.app.Activity
 import android.app.AppOpsManager
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Rect
 import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Bundle
@@ -13,6 +15,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -45,6 +48,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.example.ui.theme.MyApplicationTheme
 import androidx.compose.ui.res.stringResource
 import com.example.R
+import com.example.capture.ScreenCaptureManager
+import com.example.capture.ScreenCaptureOverlay
 import com.example.ui.theme.CardDark
 import com.example.ui.theme.TextSecondary
 import kotlinx.coroutines.Dispatchers
@@ -113,7 +118,6 @@ fun OverlayScreen(onDismiss: () -> Unit) {
     var favoritePackageNames by remember { mutableStateOf(FavoritesPreferences.getFavorites(context)) }
 
     // Vault tab states
-    val ocrState by FloatingLauncherService.ocrModuleState.collectAsState()
     var vaultInputText by rememberSaveable { mutableStateOf("") }
     val savedVaultEntries by repository.vaultEntries.collectAsState(initial = emptyList())
     val filteredVaultEntries = remember(savedVaultEntries) {
@@ -122,6 +126,62 @@ fun OverlayScreen(onDismiss: () -> Unit) {
     var currentFolderId by rememberSaveable { mutableStateOf<Long?>(null) }
     var editingEntry by remember { mutableStateOf<VaultEntry?>(null) }
     val savedVaultFolders by repository.vaultFolders.collectAsState(initial = emptyList())
+
+    // ----------------------------------------------------------------
+    // Scan Screen (OCR) flow state.
+    //   - isScanOverlayVisible: when true, the full-screen translucent
+    //     ScreenCaptureOverlay is shown INSTEAD of the regular Vault UI.
+    //   - pendingCaptureRegion: holds the user's selection between
+    //     "Capture" tap and the MediaProjection consent dialog returning.
+    //   - The MediaProjection consent dialog is launched ONCE per app
+    //     session (ScreenCaptureManager.hasActiveProjection() short-
+    //     circuits subsequent scans). This fixes the previous failure
+    //     mode of re-prompting every single scan.
+    // ----------------------------------------------------------------
+    var isScanOverlayVisible by rememberSaveable { mutableStateOf(false) }
+    var pendingCaptureRegion by remember { mutableStateOf<Rect?>(null) }
+
+    // MediaProjection consent launcher. The Activity Result API handles the
+    // startActivityForResult dance for us. On success we forward the result
+    // to FloatingLauncherService which actually performs the capture+OCR.
+    val mediaProjectionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val region = pendingCaptureRegion
+        if (result.resultCode == Activity.RESULT_OK && result.data != null && region != null) {
+            // Forward the result + region to the foreground service. The service:
+            //   1) promotes itself to FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION (10s rule)
+            //   2) hides the bubble
+            //   3) waits CAPTURE_SETTLE_DELAY_MS so our own UI is fully off-screen
+            //   4) captures the region in-memory via MediaProjection
+            //   5) runs Tesseract OCR (eng+ara, PSM_SINGLE_BLOCK, with preprocessing)
+            //   6) saves the result to Vault with source="OCR"
+            //   7) restores the bubble + reopens this activity on the Vault tab
+            val serviceIntent = Intent(context, FloatingLauncherService::class.java).apply {
+                action = FloatingLauncherService.ACTION_CAPTURE_SCREEN
+                putExtra(FloatingLauncherService.EXTRA_RESULT_CODE, result.resultCode)
+                putExtra(FloatingLauncherService.EXTRA_RESULT_DATA, result.data)
+                putExtra(FloatingLauncherService.EXTRA_CAPTURE_REGION, region)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(serviceIntent)
+            } else {
+                context.startService(serviceIntent)
+            }
+            // Dismiss the overlay activity NOW so the captured frame shows the
+            // underlying app, not Orbit's own UI. The service's named settle delay
+            // (CAPTURE_SETTLE_DELAY_MS) gives our exit animation time to complete.
+            animateDismiss()
+        } else {
+            Toast.makeText(
+                context,
+                "Screen capture permission denied or no region selected.",
+                Toast.LENGTH_SHORT
+            ).show()
+            pendingCaptureRegion = null
+            isScanOverlayVisible = false
+        }
+    }
 
     // Calculator tab states
     var calculatorInputText by rememberSaveable { mutableStateOf("") }
@@ -400,14 +460,13 @@ fun OverlayScreen(onDismiss: () -> Unit) {
                                     editingEntry = entry
                                     vaultInputText = entry?.content ?: ""
                                 },
-                                onScanScreen = {
-                                    animateDismiss()
-                                    FloatingLauncherService.startOcrCapture(context, currentFolderId)
-                                },
                                 accentColor = accentColor,
-                                ocrState = ocrState,
-                                onRetryOcrDownload = {
-                                    FloatingLauncherService.downloadOcrModule(context)
+                                onScanScreen = {
+                                    // Show the full-screen translucent selection overlay.
+                                    // The overlay's "Capture" callback handles both the
+                                    // "already have a projection" path (skip consent dialog)
+                                    // and the "need consent first" path (launch dialog).
+                                    isScanOverlayVisible = true
                                 }
                             )
                         }
@@ -465,6 +524,59 @@ fun OverlayScreen(onDismiss: () -> Unit) {
                     Text(stringResource(id = R.string.overlay_close), color = TextSecondary, fontSize = 14.sp)
                 }
             }
+        }
+
+        // ----------------------------------------------------------------
+        // Scan Screen (OCR) overlay layer.
+        // Rendered on top of the launchpad Card when the user taps "Scan Screen".
+        // The overlay itself forces LTR internally (so Arabic UI mode does NOT
+        // mirror the selection rectangle). On "Capture" we either:
+        //   - Forward the region directly to the service if a MediaProjection is
+        //     already active (no consent re-prompt — fixes previous bug).
+        //   - Launch the consent dialog first; on result, forward to the service.
+        // ----------------------------------------------------------------
+        if (isScanOverlayVisible) {
+            ScreenCaptureOverlay(
+                onCancel = {
+                    isScanOverlayVisible = false
+                    pendingCaptureRegion = null
+                },
+                onCapture = { composeRect ->
+                    // Convert Compose's geometry Rect to android.graphics.Rect (Int),
+                    // matching the raw screen pixels MediaProjection will produce.
+                    val region = Rect(
+                        composeRect.left.toInt(),
+                        composeRect.top.toInt(),
+                        composeRect.right.toInt(),
+                        composeRect.bottom.toInt()
+                    )
+                    pendingCaptureRegion = region
+
+                    if (ScreenCaptureManager.hasActiveProjection()) {
+                        // Per-session consent already granted — skip the dialog and
+                        // fire the capture intent directly. This avoids re-prompting
+                        // the user on every single scan (previous failure mode).
+                        val serviceIntent = Intent(context, FloatingLauncherService::class.java).apply {
+                            action = FloatingLauncherService.ACTION_CAPTURE_SCREEN
+                            // Reuse the cached projection: pass RESULT_OK + null data.
+                            // The service's createProjection() will detect null data
+                            // and reuse the existing MediaProjection instance.
+                            putExtra(FloatingLauncherService.EXTRA_RESULT_CODE, Activity.RESULT_OK)
+                            putExtra(FloatingLauncherService.EXTRA_CAPTURE_REGION, region)
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            context.startForegroundService(serviceIntent)
+                        } else {
+                            context.startService(serviceIntent)
+                        }
+                        animateDismiss()
+                    } else {
+                        // First scan this session — show the system consent dialog.
+                        val intent = ScreenCaptureManager.createScreenCaptureIntent(context)
+                        mediaProjectionLauncher.launch(intent)
+                    }
+                }
+            )
         }
     }
 }
