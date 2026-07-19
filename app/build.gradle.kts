@@ -1,5 +1,8 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
 import java.util.Properties
+import java.net.URI
+import java.io.InputStream
+import java.io.FileOutputStream
 
 plugins {
   alias(libs.plugins.android.application)
@@ -187,12 +190,12 @@ tasks.register("downloadAndVerifyTessdata") {
             val needsDownload = !targetFile.exists() || targetFile.length() < minBytes
             if (needsDownload) {
                 logger.lifecycle("Downloading $fileName from tessdata_fast...")
-                val url = java.net.URI("$tessdataBaseUrl/$fileName").toURL()
-                url.openStream().use { input: java.io.InputStream ->
-                 targetFile.outputStream().use { output: java.io.FileOutputStream ->
-                   input.copyTo(output)
-                  }
-               }
+                val url = URI("$tessdataBaseUrl/$fileName").toURL()
+                url.openStream().use { input: InputStream ->
+                    targetFile.outputStream().use { output: FileOutputStream ->
+                        input.copyTo(output)
+                    }
+                }
             }
 
             val actualBytes = targetFile.length()
