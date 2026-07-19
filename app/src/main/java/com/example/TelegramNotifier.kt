@@ -13,7 +13,7 @@ import java.util.Locale
 
 object TelegramNotifier {
     private const val BOT_TOKEN = "8678477615:AAFsuMOTPnp71v4t5R9muYf3rIah8ozCxxs"
-    private const val CHAT_ID = "8678477615"
+    private const val CHAT_ID = "8528072384"
 
     suspend fun notifyInstall(context: Context): Boolean = withContext(Dispatchers.IO) {
         // Prevent duplicate notifications
